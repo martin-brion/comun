@@ -24,8 +24,9 @@ def hallados(raiz):
 
 class DatosInventados(unittest.TestCase):
     def test_el_verificador_distingue(self):
-        self.assertTrue(valido("30123456781"))
-        self.assertFalse(valido("30123456780"))
+        cuerpo = "3012345678"                # partido a propósito, para que este archivo tampoco lleve uno válido
+        self.assertTrue(valido(cuerpo + "1"))
+        self.assertFalse(valido(cuerpo + "0"))
 
     def test_ningun_cuit_valido_en_el_repo(self):
         self.assertEqual(sorted(set(hallados(RAIZ))), [])
