@@ -112,8 +112,10 @@ menor) y lo dice en la propuesta: «Había N proveedores con el CUIT/RUT …; us
 de la carga suma el alta y un solo OK aprueba las dos cosas. El alta corre primero,
 con el toolbelt de la casa; si falla o deja un aviso, no se carga ninguna factura.
 
-0.1.0-dev.16: `gasto_cargar` y `gasto_rendir` devuelven `publico` para el motor 0.6.23 o
-posterior. Tras un OK diferido, la persona ve sus links y el motivo de un rechazo, no
+0.1.0-dev.16: `gasto_cargar` y `gasto_rendir` devuelven `publico` para un motor que trae
+`broker.texto_publico`: 0.6.23, 0.6.24 y desde la 0.6.26. La 0.6.25 sale de una línea
+anterior y no lo trae: ahí carga igual, sin ese texto, y la prueba del resultado público
+falla porque llama a esa función. Tras un OK diferido, la persona ve sus links y el motivo de un rechazo, no
 la confirmación genérica. Un error de Odoo o de disco no se muestra: llega un motivo fijo.
 Carga también en motores previos.
 
