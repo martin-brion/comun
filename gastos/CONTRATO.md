@@ -353,9 +353,10 @@ Los tipos de cada contrato se comparan con lo que devuelve fields_get. Un campo 
 cambia de tipo entre versiones de Odoo lleva en el contrato los tipos que valen
 (0.1.0-dev.8): ir.attachment.res_id acepta many2one_reference, que es el de Odoo 18,
 o integer. Una sola definición (estandar.ADJUNTO) sirve a este contrato y al control
-de RRHH (facturas.CONTRATO_CONTROL). Todos los tipos fijos se prueban contra el
-fields_get real de un Odoo 18 en producción (tests/datos/fields_get_odoo18.json, solo
-esquema). Si el destino no cumple, el error dice que es del plugin («Plugin de gastos
+de RRHH (facturas.CONTRATO_CONTROL). Todos los tipos fijos se prueban contra un
+fields_get de Odoo 18 (tests/datos/fields_get_odoo18.json, solo esquema). Hasta la
+dev.16 era la copia de una base en producción; desde la 0.1.0-dev.17 es inventado, con
+los tipos de Odoo 18 que piden los contratos. Si el destino no cumple, el error dice que es del plugin («Plugin de gastos
 (versión del bot): … Lo arregla quien mantiene el bot…»). Dice además qué campo
 falta o tiene otro tipo, y que cambiar de destino no lo resuelve.
 

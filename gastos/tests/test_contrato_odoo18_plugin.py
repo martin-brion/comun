@@ -1,9 +1,9 @@
-"""Los contratos de campos del plugin contra el fields_get real de un Odoo 18 en producción (tests/datos/fields_get_odoo18.json).
+"""Los contratos de campos del plugin contra un fields_get de Odoo 18 (tests/datos/fields_get_odoo18.json).
 
 Primera carga real (29/10): gasto_preparar cortó con «El destino no expone el contrato estándar requerido de ir.attachment».
 En Odoo 18, ir.attachment.res_id es many2one_reference, y los dos contratos (estandar y el control de RRHH) pedían integer.
-Los dobles de las pruebas también decían integer, así que nada lo detectaba. El fixture es el esquema real (tipo y readonly),
-sin datos. El agente leyó el error como un problema de configuración y ofreció probar en otro destino: el mensaje ahora dice
+Los dobles de las pruebas también decían integer, así que nada lo detectaba. Hasta la 0.1.0-dev.16 el fixture era el
+esquema de una base real; desde la dev.17 es inventado: tipo y readonly de Odoo 18 para cada campo de los contratos. El agente leyó el error como un problema de configuración y ofreció probar en otro destino: el mensaje ahora dice
 que es del plugin.
 """
 import copy

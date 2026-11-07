@@ -10,4 +10,4 @@ El contrato precede a los cambios. No modificar el motor desde este paquete:
 sus APIs se desarrollan y prueban en su propio worktree. Las pruebas del plugin
 usan git archive de una ref exacta del motor, entorno aislado y cargador real.
 Todo en verde antes de entregar. Ningún despliegue ni push sin autorización.
-Esta carpeta es fuente provisional, sin repositorio nuevo hasta decidir destino.
+Esta carpeta vive en el repo común: cada cambio sigue proceso/desarrollo.md.

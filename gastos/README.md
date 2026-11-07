@@ -3,7 +3,7 @@
 Extracción del circuito de gastos por foto: propuesta de solo lectura, confirmación
 L2 ligada a huella y carga idempotente de borradores con fotos verificadas. No envía,
 aprueba ni contabiliza. Código genérico; datos y configuración pertenecen a la capa
-de cada casa. Fuente provisional sin repositorio nuevo ni despliegue.
+de cada casa. Cada versión cruza como entrega sin historia y la despliega quien la corre.
 
 El plugin selecciona empresa y destino por corrida. El mismo lote admite propuestas
 sucesivas en ensayo y principal, cada una con su OK L2 y recibo independiente.
@@ -117,6 +117,13 @@ posterior. Tras un OK diferido, la persona ve sus links y el motivo de un rechaz
 la confirmación genérica. Un error de Odoo o de disco no se muestra: llega un motivo fijo.
 Carga también en motores previos.
 
+0.1.0-dev.17: el plugin es el mismo de la dev.16, archivo por archivo. Cambian dos
+pruebas. El `fields_get` de Odoo 18 ya no es la copia de una base en producción: lo
+arman los tipos de Odoo 18 que piden los contratos del plugin, sin salir de ninguna
+base. Y las identificaciones fiscales de `test_fiscal_plugin.py` son inventadas, con
+dígito verificador inválido. Por eso esa prueba ya no detecta un tipo que una base
+real tenga distinto: eso lo ve la sonda del destino.
+
 También en la dev.8, el cierre del lote por inactividad sale de `gastos.json`:
 `"lote": {"cierre_inactividad_min": null}`, a nivel plugin. null, el default, no
 cierra solo: el lote espera el «sí» de la persona. Un entero >= 1 cierra el lote
@@ -189,8 +196,8 @@ importe de líneas existentes de su factura, en borrador.
 Y corrige un error de la dev.7 que frenaba la primera carga real. En Odoo 18,
 `ir.attachment.res_id` es `many2one_reference`, pero los dos contratos (estándar y
 control de RRHH) pedían `integer`. Ahora aceptan los dos, con una sola definición,
-y se prueban contra el `fields_get` real de un Odoo 18
-(`tests/datos/fields_get_odoo18.json`). El error de contrato dice que es del
+y se prueban contra un `fields_get` de Odoo 18
+(`tests/datos/fields_get_odoo18.json`, inventado desde la dev.17). El error de contrato dice que es del
 plugin y que lo arregla quien mantiene el bot.
 
 Base del motor v0.6.0. No requiere otro patch ni instalar addons en el destino
