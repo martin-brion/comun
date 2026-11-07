@@ -37,8 +37,9 @@ Un solo job: de una idea a un pedido que el otro lado pueda hacer sin preguntar.
   2. Escribí `~/motores-compartidos/pedidos/AAMMDD-tema.md`: qué hace falta, para qué, cómo se prueba y a quién avisar.
   3. Si nace en el lado que recibe, el pedido es la especificación: qué hace, reglas, modelos y campos, casos inventados y
      lo que ya falló. Decí quién la escribió. Sin código, IDs ni ejemplos reales.
-  4. Avisá a una sesión del otro lado por el canal del `LEEME.md`.
-- **Outputs.** El pedido, en esa carpeta.
+  4. Avisá a una sesión del otro lado por el canal del `LEEME.md`. Si todavía no puede recibirlo, el pedido queda en espera
+     del lado que lo escribió, con «Cuándo» y sus respuestas, y se deja en la carpeta al poder avisar.
+- **Outputs.** El pedido, en esa carpeta o en espera.
 - **Chequeo.** Automático: el lado que corta barre la carpeta y frena ante cualquier nombre.
 - **Punto de commit.** Ninguno: la carpeta no es un repo.
 
@@ -49,7 +50,8 @@ Un solo job: del pedido a una decisión escrita sobre dónde se programa.
 - **Inputs.** De esta corrida: el pedido. De todas: la tabla de arriba.
 - **NO cargar:** código del lado que recibe.
 - **Process.**
-  1. Un arreglo a algo que ya está en `motor-chat` o `comun` sigue derecho a la etapa 3.
+  1. Un arreglo a algo que ya está en `motor-chat` o `comun` sigue derecho a la etapa 3, con el freno de origen que ya tenga
+     (paso 4).
   2. Algo nuevo entra en `comun` solo si cumple las tres: lo usan las dos empresas, anda sin nombrar a nadie y se prueba con
      datos inventados. Si falta una, queda en su casa.
   3. Un módulo propio de Odoo pide además mirar si alcanza con uno público y con la licencia a la vista.
@@ -68,7 +70,8 @@ Un solo job: del pedido a una rama con el cambio y sus pruebas. Lo hace la sesi�
   del componente.
 - **NO cargar:** código ni datos del lado que recibe.
 - **Process.**
-  1. Rama corta en el repo que toca, con la identidad de ese repo.
+  1. Rama corta en el repo que toca, con la identidad de ese repo y un nombre distinto del tag que va a salir: si se llaman
+     igual, publicar el tag es ambiguo.
   2. Si cambia lo que otro componente espera, decilo en el pedido antes de cortar.
   3. Pruebas solo con datos inventados. Un error que aparece únicamente con datos reales lo destila el lado que los tiene: un
      caso inventado en el pedido.
@@ -97,14 +100,15 @@ Un solo job: de la rama a una revisión independiente, con lo que tenga un caso 
 
 Un solo job: de la rama revisada a un tag publicado.
 
-- **Inputs.** De esta corrida: la rama. De todas: `scripts/IDENTIFICADORES.md` del repo.
+- **Inputs.** De esta corrida: la rama. De todas: `scripts/IDENTIFICADORES.md` del repo y, si el componente tiene pruebas
+  propias, la sección de pruebas de su README: el etiquetado las corre y piden el entorno que dice ahí.
 - **NO cargar:** la lista en claro: nunca entra en un repo que se entrega.
 - **Process.**
   1. Uní la rama a `main` y actualizá `VERSION`.
   2. Etiquetá. `motor-chat`: `bash scripts/etiquetar.sh vX.Y.Z`, con su recibo. `comun`: `bash scripts/etiquetar.sh
      <componente> <versión>`.
-  3. Publicá el tag con `git push origin <tag>`. Nunca a la fuerza ni saltando controles.
-- **Outputs.** El tag, publicado.
+  3. Publicá `main` y el tag: `git push origin main <tag>`. Nunca a la fuerza ni saltando controles.
+- **Outputs.** `main` y el tag, publicados.
 - **Chequeo.** Automático: la compuerta y las pruebas corren en el etiquetado. Con un hallazgo no hay tag.
 - **Punto de commit.** El tag.
 
@@ -117,8 +121,9 @@ Un solo job: del tag a una entrega en la carpeta compartida.
 - **Process.**
   1. Armá la entrega con la herramienta. El motor pide además qué commits ya desplegados trae.
   2. Barré `~/motores-compartidos` con la misma herramienta.
-  3. Anotá en el pedido, sin nombres, qué cambió y qué revisar.
-  4. Avisá al lado que recibe.
+  3. Anotá la versión en «Última cortada» de `versiones.md`.
+  4. Anotá en el pedido, sin nombres, qué cambió y qué revisar.
+  5. Avisá al lado que recibe.
 - **Outputs.** `~/motores-compartidos/entregas/<componente>-<versión>/`, su `.tar` y su `.json`.
 - **Chequeo.** Automático: la entrega y el barrido frenan ante un nombre o una copia de un repo. Una entrega no se edita: el
   arreglo sale en la versión siguiente.
