@@ -1,0 +1,42 @@
+<odoo>
+    <record id="company_receipt_bill_direct" model="ir.ui.view">
+        <field name="name">res.company.receipt.bill.direct</field>
+        <field name="model">res.company</field>
+        <field name="inherit_id" ref="base.view_company_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet" position="inside">
+                <group string="Comprobantes por foto: registro contable" groups="base.group_system">
+                    <field name="receipt_bill_enabled"/>
+                    <field name="receipt_bill_user_ids" widget="many2many_tags"/>
+                    <field name="receipt_bill_journal_id"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+    <record id="bill_receipt_bill_direct" model="ir.ui.view">
+        <field name="name">account.move.receipt.bill.direct</field>
+        <field name="model">account.move</field>
+        <field name="inherit_id" ref="account.view_move_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//header" position="inside">
+                <button name="action_receipt_bill_direct_review" string="Confirmar revisión del comprobante"
+                        type="object" groups="account.group_account_invoice"
+                        invisible="not receipt_bill_lot or state != 'draft'"
+                        confirm="Confirmo que revisé proveedor, documento, moneda, importe, cuentas, analítica e impuestos contra la evidencia. Esta acción no contabiliza ni autoriza reembolsos."/>
+            </xpath>
+            <xpath expr="//sheet" position="inside">
+                <group string="Evidencia de origen" invisible="not receipt_bill_lot">
+                    <field name="receipt_bill_contract"/>
+                    <field name="receipt_bill_lot"/>
+                    <field name="receipt_bill_photo"/>
+                    <field name="receipt_bill_payment"/>
+                    <field name="receipt_bill_source_uid"/>
+                    <field name="receipt_bill_original_total"/>
+                    <field name="receipt_bill_original_analytic"/>
+                    <field name="receipt_bill_direct_review_by_id"/>
+                    <field name="receipt_bill_direct_review_at"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+</odoo>

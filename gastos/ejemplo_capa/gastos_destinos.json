@@ -1,0 +1,157 @@
+{
+  "retencion_dias": 90,
+  "empresas": {
+    "taller": {
+      "company_id": 3,
+      "zona_horaria": "Etc/UTC",
+      "diario": {
+        "ids": {
+          "ensayo": 161,
+          "principal": 61
+        }
+      },
+      "compania": "Casa de Prueba taller",
+      "imputador": "imputador_taller",
+      "politica": "politica_taller",
+      "destinos": {
+        "ensayo": {
+          "url": "https://ensayo.example.test",
+          "db": "casa_prueba",
+          "link_url": "https://ensayo.example.test",
+          "secreto_login": "ENSAYO_LOGIN",
+          "secreto_api_key": "ENSAYO_KEY",
+          "company_id": 13,
+          "capacidades": {
+            "factura": "addon",
+            "rendicion": "vinculada",
+            "control_sin_contabilizar_confirmado": false
+          }
+        },
+        "principal": {
+          "url": "https://principal.example.test",
+          "db": "casa_prueba",
+          "link_url": "https://principal.example.test",
+          "secreto_login": "PRINCIPAL_LOGIN",
+          "secreto_api_key": "PRINCIPAL_KEY",
+          "company_id": 3,
+          "capacidades": {
+            "factura": "estandar",
+            "rendicion": "revision_hr",
+            "control_sin_contabilizar_confirmado": false
+          }
+        }
+      },
+      "categorias": {
+        "Traslados": {
+          "ids": {
+            "ensayo": 401,
+            "principal": 501
+          }
+        },
+        "Materiales": {
+          "ids": {
+            "ensayo": 402,
+            "principal": 502
+          }
+        },
+        "Comidas": {
+          "ids": {
+            "ensayo": 403,
+            "principal": 503
+          }
+        }
+      },
+      "rendicion": true,
+      "cuentas": {
+        "Traslados": {
+          "ids": {
+            "ensayo": 701,
+            "principal": 801
+          }
+        },
+        "Materiales": {
+          "ids": {
+            "ensayo": 702,
+            "principal": 802
+          }
+        },
+        "Comidas": {
+          "ids": {
+            "ensayo": 703,
+            "principal": 803
+          }
+        }
+      }
+    },
+    "oficina": {
+      "company_id": 7,
+      "zona_horaria": "Etc/UTC",
+      "diario": {
+        "ids": {
+          "ensayo": 171,
+          "principal": 71
+        }
+      },
+      "compania": "Casa de Prueba oficina",
+      "imputador": "imputador_oficina",
+      "politica": "politica_oficina",
+      "destinos": {
+        "ensayo": {
+          "url": "https://ensayo.example.test",
+          "db": "casa_prueba",
+          "link_url": "https://ensayo.example.test",
+          "secreto_login": "ENSAYO_LOGIN",
+          "secreto_api_key": "ENSAYO_KEY",
+          "company_id": 17,
+          "capacidades": {
+            "factura": "addon",
+            "rendicion": "ninguna",
+            "control_sin_contabilizar_confirmado": false
+          }
+        },
+        "principal": {
+          "url": "https://principal.example.test",
+          "db": "casa_prueba",
+          "link_url": "https://principal.example.test",
+          "secreto_login": "PRINCIPAL_LOGIN",
+          "secreto_api_key": "PRINCIPAL_KEY",
+          "company_id": 7,
+          "capacidades": {
+            "factura": "estandar",
+            "rendicion": "ninguna",
+            "control_sin_contabilizar_confirmado": false
+          }
+        }
+      },
+      "categorias": {
+        "Traslados": {
+          "ids": {
+            "ensayo": 401,
+            "principal": 501
+          }
+        },
+        "Materiales": {
+          "ids": {
+            "ensayo": 402,
+            "principal": 502
+          }
+        }
+      },
+      "rendicion": false,
+      "cuentas": {
+        "Traslados": {
+          "ids": {
+            "ensayo": 701,
+            "principal": 801
+          }
+        },
+        "Materiales": {
+          "ids": {
+            "ensayo": 702,
+            "principal": 802
+          }
+        }
+      }
+    }
+  }
+}

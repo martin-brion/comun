@@ -1,0 +1,24 @@
+{
+  "cuentas": {
+    "taller": {
+      "ensayo": 41,
+      "principal": 141
+    },
+    "oficina": {
+      "ensayo": 42,
+      "principal": 142
+    }
+  },
+  "topes": {
+    "taller": {
+      "moneda": "XTS",
+      "importe": "100.00",
+      "bloquea": false
+    },
+    "oficina": {
+      "moneda": "XTS",
+      "importe": "200.00",
+      "bloquea": true
+    }
+  }
+}

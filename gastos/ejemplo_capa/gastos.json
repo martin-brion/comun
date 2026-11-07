@@ -1,0 +1,287 @@
+{
+  "retencion_dias": 90,
+  "lote": {"cierre_inactividad_min": null},
+  "empresas": {
+    "taller": {
+      "company_id": 3,
+      "zona_horaria": "Etc/UTC",
+      "id_fiscal": "30777777770",
+      "destino_por_defecto": "principal",
+      "diario": {
+        "ids": {
+          "ensayo": 161,
+          "principal": 61
+        }
+      },
+      "compania": "Casa de Prueba taller",
+      "imputador": "imputador_taller",
+      "politica": "politica_taller",
+      "destinos": {
+        "ensayo": {
+          "url": "https://ensayo.example.test",
+          "db": "casa_prueba",
+          "link_url": "https://ensayo.example.test",
+          "secreto_login": "ENSAYO_LOGIN",
+          "secreto_api_key": "ENSAYO_KEY",
+          "company_id": 13,
+          "capacidades": {
+            "factura": "addon",
+            "rendicion": "vinculada",
+            "control_sin_contabilizar_confirmado": false
+          }
+        },
+        "principal": {
+          "url": "https://principal.example.test",
+          "db": "casa_prueba",
+          "link_url": "https://principal.example.test",
+          "secreto_login": "PRINCIPAL_LOGIN",
+          "secreto_api_key": "PRINCIPAL_KEY",
+          "company_id": 3,
+          "capacidades": {
+            "factura": "estandar",
+            "rendicion": "revision_hr",
+            "control_sin_contabilizar_confirmado": false
+          }
+        }
+      },
+      "categorias": {
+        "Traslados": {
+          "ids": {
+            "ensayo": 401,
+            "principal": 501
+          }
+        },
+        "Materiales": {
+          "ids": {
+            "ensayo": 402,
+            "principal": 502
+          }
+        },
+        "Comidas": {
+          "ids": {
+            "ensayo": 403,
+            "principal": 503
+          }
+        }
+      },
+      "rendicion": true,
+      "cuentas": {
+        "Traslados": {
+          "ids": {
+            "ensayo": 701,
+            "principal": 801
+          }
+        },
+        "Materiales": {
+          "ids": {
+            "ensayo": 702,
+            "principal": 802
+          }
+        },
+        "Comidas": {
+          "ids": {
+            "ensayo": 703,
+            "principal": 803
+          }
+        }
+      },
+      "impuestos": {
+        "iva": {
+          "21": {
+            "ids": {
+              "ensayo": 821,
+              "principal": 721
+            }
+          },
+          "10.5": {
+            "ids": {
+              "ensayo": 822,
+              "principal": 722
+            }
+          }
+        },
+        "no_gravado": {
+          "ids": {
+            "ensayo": 823,
+            "principal": 723
+          }
+        },
+        "exento": {
+          "ids": {
+            "ensayo": 824,
+            "principal": 724
+          }
+        },
+        "sin_credito": {
+          "ids": {
+            "ensayo": 825,
+            "principal": 725
+          }
+        },
+        "percepciones": {
+          "iva": {
+            "ids": {
+              "ensayo": 832,
+              "principal": 732
+            }
+          },
+          "iibb": {
+            "B": {
+              "ids": {
+                "ensayo": 831,
+                "principal": 731
+              }
+            },
+            "C": {
+              "ids": {
+                "ensayo": 833,
+                "principal": 733
+              }
+            }
+          }
+        }
+      },
+      "documentos": {
+        "1": {
+          "ids": {
+            "ensayo": 901,
+            "principal": 801
+          },
+          "iva": "discriminado"
+        },
+        "6": {
+          "ids": {
+            "ensayo": 906,
+            "principal": 806
+          },
+          "iva": "incluido"
+        },
+        "81": {
+          "cargar_como": "1"
+        }
+      }
+    },
+    "oficina": {
+      "company_id": 7,
+      "zona_horaria": "Etc/UTC",
+      "id_fiscal": "30888888880",
+      "emisor_id_fiscal_patron": "[0-9]{12}",
+      "diario": {
+        "ids": {
+          "ensayo": 171,
+          "principal": 71
+        }
+      },
+      "compania": "Casa de Prueba oficina",
+      "imputador": "imputador_oficina",
+      "politica": "politica_oficina",
+      "destinos": {
+        "ensayo": {
+          "url": "https://ensayo.example.test",
+          "db": "casa_prueba",
+          "link_url": "https://ensayo.example.test",
+          "secreto_login": "ENSAYO_LOGIN",
+          "secreto_api_key": "ENSAYO_KEY",
+          "company_id": 17,
+          "capacidades": {
+            "factura": "addon",
+            "rendicion": "ninguna",
+            "control_sin_contabilizar_confirmado": false
+          }
+        },
+        "principal": {
+          "url": "https://principal.example.test",
+          "db": "casa_prueba",
+          "link_url": "https://principal.example.test",
+          "secreto_login": "PRINCIPAL_LOGIN",
+          "secreto_api_key": "PRINCIPAL_KEY",
+          "company_id": 7,
+          "capacidades": {
+            "factura": "estandar",
+            "rendicion": "ninguna",
+            "control_sin_contabilizar_confirmado": false
+          }
+        }
+      },
+      "categorias": {
+        "Traslados": {
+          "ids": {
+            "ensayo": 401,
+            "principal": 501
+          }
+        },
+        "Materiales": {
+          "ids": {
+            "ensayo": 402,
+            "principal": 502
+          }
+        }
+      },
+      "rendicion": false,
+      "cuentas": {
+        "Traslados": {
+          "ids": {
+            "ensayo": 701,
+            "principal": 801
+          }
+        },
+        "Materiales": {
+          "ids": {
+            "ensayo": 702,
+            "principal": 802
+          }
+        }
+      },
+      "impuestos": {
+        "iva": {
+          "21": {
+            "ids": {
+              "ensayo": 821,
+              "principal": 721
+            }
+          },
+          "10.5": {
+            "ids": {
+              "ensayo": 822,
+              "principal": 722
+            }
+          }
+        },
+        "no_gravado": {
+          "ids": {
+            "ensayo": 823,
+            "principal": 723
+          }
+        },
+        "exento": {
+          "ids": {
+            "ensayo": 824,
+            "principal": 724
+          }
+        },
+        "sin_credito": {
+          "ids": {
+            "ensayo": 825,
+            "principal": 725
+          }
+        }
+      },
+      "documentos": {
+        "1": {
+          "ids": {
+            "ensayo": 901,
+            "principal": 801
+          },
+          "iva": "discriminado"
+        },
+        "6": {
+          "ids": {
+            "ensayo": 906,
+            "principal": 806
+          },
+          "iva": "incluido"
+        }
+      }
+    }
+  }
+}

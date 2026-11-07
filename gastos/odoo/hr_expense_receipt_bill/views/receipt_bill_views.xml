@@ -1,0 +1,48 @@
+<odoo>
+    <record id="company_receipt_bill" model="ir.ui.view">
+        <field name="name">res.company.receipt.bill</field>
+        <field name="model">res.company</field>
+        <field name="inherit_id" ref="base.view_company_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet" position="inside">
+                <group string="Gastos por foto: borradores de proveedor" groups="base.group_system">
+                    <field name="receipt_bill_enabled"/>
+                    <field name="receipt_bill_user_ids" widget="many2many_tags"/>
+                    <field name="receipt_bill_journal_id"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+    <record id="sheet_receipt_bill" model="ir.ui.view">
+        <field name="name">hr.expense.sheet.receipt.bill</field>
+        <field name="model">hr.expense.sheet</field>
+        <field name="inherit_id" ref="hr_expense.view_hr_expense_sheet_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//header" position="inside">
+                <button name="action_receipt_bill_prepare" string="Preparar borradores de proveedor" type="object"
+                        groups="account.group_account_invoice" invisible="state != 'draft'"/>
+            </xpath>
+        </field>
+    </record>
+    <record id="bill_receipt_bill" model="ir.ui.view">
+        <field name="name">account.move.receipt.bill</field>
+        <field name="model">account.move</field>
+        <field name="inherit_id" ref="account.view_move_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//header" position="inside">
+                <button name="action_receipt_bill_review" string="Confirmar revisión fiscal" type="object"
+                        groups="account.group_account_invoice" invisible="not receipt_bill_expense_id or state != 'draft'"
+                        confirm="Confirmo que revisé proveedor, documento, moneda, importe, cuentas e impuestos contra el comprobante original. Esta acción no contabiliza."/>
+            </xpath>
+            <xpath expr="//sheet" position="inside">
+                <group string="Comprobante de un gasto: pendiente de clasificación fiscal"
+                       invisible="not receipt_bill_expense_id">
+                    <field name="receipt_bill_expense_id"/>
+                    <field name="receipt_bill_marker"/>
+                    <field name="receipt_bill_reviewed_by_id"/>
+                    <field name="receipt_bill_reviewed_at"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+</odoo>

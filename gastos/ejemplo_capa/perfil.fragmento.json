@@ -1,0 +1,7 @@
+{
+  "tools": [
+    "nucleo",
+    "gastos",
+    "capa_prueba"
+  ]
+}

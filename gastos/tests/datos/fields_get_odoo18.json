@@ -1,0 +1,236 @@
+{
+ "_origen": {
+  "odoo": "18.0",
+  "fuente": "inventado a partir de los contratos del plugin: no sale de ninguna base"
+ },
+ "account.move": {
+  "amount_tax": {
+   "type": "monetary",
+   "readonly": false
+  },
+  "amount_total": {
+   "type": "monetary",
+   "readonly": false
+  },
+  "auto_post": {
+   "type": "selection",
+   "readonly": false
+  },
+  "company_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "create_uid": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "currency_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "date": {
+   "type": "date",
+   "readonly": false
+  },
+  "invoice_date": {
+   "type": "date",
+   "readonly": false
+  },
+  "invoice_line_ids": {
+   "type": "one2many",
+   "readonly": false
+  },
+  "invoice_origin": {
+   "type": "char",
+   "readonly": false
+  },
+  "journal_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "l10n_latam_document_number": {
+   "type": "char",
+   "readonly": false
+  },
+  "l10n_latam_document_type_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "line_ids": {
+   "type": "one2many",
+   "readonly": false
+  },
+  "move_type": {
+   "type": "selection",
+   "readonly": false
+  },
+  "narration": {
+   "type": "html",
+   "readonly": false
+  },
+  "partner_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "ref": {
+   "type": "char",
+   "readonly": false
+  },
+  "state": {
+   "type": "selection",
+   "readonly": false
+  }
+ },
+ "account.move.line": {
+  "account_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "amount_currency": {
+   "type": "monetary",
+   "readonly": false
+  },
+  "analytic_distribution": {
+   "type": "json",
+   "readonly": false
+  },
+  "discount": {
+   "type": "float",
+   "readonly": false
+  },
+  "display_type": {
+   "type": "selection",
+   "readonly": false
+  },
+  "price_unit": {
+   "type": "float",
+   "readonly": false
+  },
+  "product_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "quantity": {
+   "type": "float",
+   "readonly": false
+  },
+  "tax_ids": {
+   "type": "many2many",
+   "readonly": false
+  },
+  "tax_line_id": {
+   "type": "many2one",
+   "readonly": false
+  }
+ },
+ "hr.expense": {
+  "analytic_distribution": {
+   "type": "json",
+   "readonly": false
+  },
+  "company_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "currency_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "date": {
+   "type": "date",
+   "readonly": false
+  },
+  "employee_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "name": {
+   "type": "char",
+   "readonly": false
+  },
+  "payment_mode": {
+   "type": "selection",
+   "readonly": false
+  },
+  "product_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "quantity": {
+   "type": "float",
+   "readonly": false
+  },
+  "state": {
+   "type": "selection",
+   "readonly": false
+  },
+  "tax_ids": {
+   "type": "many2many",
+   "readonly": false
+  },
+  "total_amount_currency": {
+   "type": "monetary",
+   "readonly": false
+  }
+ },
+ "hr.expense.sheet": {
+  "company_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "employee_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "employee_journal_id": {
+   "type": "many2one",
+   "readonly": false
+  },
+  "expense_line_ids": {
+   "type": "one2many",
+   "readonly": false
+  },
+  "name": {
+   "type": "char",
+   "readonly": false
+  },
+  "state": {
+   "type": "selection",
+   "readonly": false
+  }
+ },
+ "ir.attachment": {
+  "access_token": {
+   "type": "char",
+   "readonly": false
+  },
+  "checksum": {
+   "type": "char",
+   "readonly": false
+  },
+  "datas": {
+   "type": "binary",
+   "readonly": false
+  },
+  "name": {
+   "type": "char",
+   "readonly": false
+  },
+  "public": {
+   "type": "boolean",
+   "readonly": false
+  },
+  "res_id": {
+   "type": "many2one_reference",
+   "readonly": false
+  },
+  "res_model": {
+   "type": "char",
+   "readonly": false
+  },
+  "type": {
+   "type": "selection",
+   "readonly": false
+  }
+ }
+}

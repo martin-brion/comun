@@ -1,0 +1,20 @@
+{
+  "persona_prueba": {
+    "usuarios_erp": {
+      "ensayo": 17,
+      "principal": 27
+    },
+    "empleados_gastos": {
+      "taller": 81,
+      "oficina": 91
+    },
+    "empleados_gastos_destinos": {
+      "taller": {
+        "ensayo": 181
+      },
+      "oficina": {
+        "ensayo": 191
+      }
+    }
+  }
+}
