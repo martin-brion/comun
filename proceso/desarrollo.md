@@ -34,11 +34,12 @@ Un solo job: de una idea a un pedido que el otro lado pueda hacer sin preguntar.
 - **NO cargar:** repos, carpetas ni memoria del otro lado.
 - **Process.**
   1. Con la tabla de arriba, ubicá dónde va. Si es de una sola empresa o de un cliente, termina acá: va a su casa.
-  2. Escribí `~/motores-compartidos/pedidos/AAMMDD-tema.md`: qué hace falta, para qué, cómo se prueba y a quién avisar.
+  2. Escribí el pedido, `AAMMDD-tema.md`: qué hace falta, para qué, cómo se prueba y a quién avisar. Va a
+     `~/motores-compartidos/pedidos/`. Si el otro lado todavía no puede recibirlo, queda en espera del lado que lo escribió,
+     con «Cuándo», y junta ahí sus respuestas hasta que se deja en la carpeta.
   3. Si nace en el lado que recibe, el pedido es la especificación: qué hace, reglas, modelos y campos, casos inventados y
      lo que ya falló. Decí quién la escribió. Sin código, IDs ni ejemplos reales.
-  4. Avisá a una sesión del otro lado por el canal del `LEEME.md`. Si todavía no puede recibirlo, el pedido queda en espera
-     del lado que lo escribió, con «Cuándo» y sus respuestas, y se deja en la carpeta al poder avisar.
+  4. Al dejarlo en la carpeta, avisá a una sesión del otro lado por el canal del `LEEME.md`.
 - **Outputs.** El pedido, en esa carpeta o en espera.
 - **Chequeo.** Automático: el lado que corta barre la carpeta y frena ante cualquier nombre.
 - **Punto de commit.** Ninguno: la carpeta no es un repo.
@@ -104,10 +105,11 @@ Un solo job: de la rama revisada a un tag publicado.
   propias, la sección de pruebas de su README: el etiquetado las corre y piden el entorno que dice ahí.
 - **NO cargar:** la lista en claro: nunca entra en un repo que se entrega.
 - **Process.**
-  1. Uní la rama a `main` y actualizá `VERSION`.
+  1. Uní la rama a `main` y guardá el cambio de `VERSION` en un commit propio: el etiquetado pide el árbol limpio.
   2. Etiquetá. `motor-chat`: `bash scripts/etiquetar.sh vX.Y.Z`, con su recibo. `comun`: `bash scripts/etiquetar.sh
      <componente> <versión>`.
-  3. Publicá `main` y el tag: `git push origin main <tag>`. Nunca a la fuerza ni saltando controles.
+  3. Publicá `main` y el tag: `git push origin main <tag>`. Si el `AGENTS.md` del componente pide autorización para
+     publicar, antes va la del dueño, escrita en el pedido. Nunca a la fuerza ni saltando controles.
 - **Outputs.** `main` y el tag, publicados.
 - **Chequeo.** Automático: la compuerta y las pruebas corren en el etiquetado. Con un hallazgo no hay tag.
 - **Punto de commit.** El tag.
@@ -122,7 +124,8 @@ Un solo job: del tag a una entrega en la carpeta compartida.
   1. Armá la entrega con la herramienta. El motor pide además qué commits ya desplegados trae.
   2. Barré `~/motores-compartidos` con la misma herramienta.
   3. Anotá la versión en «Última cortada» de `versiones.md`.
-  4. Anotá en el pedido, sin nombres, qué cambió y qué revisar.
+  4. Anotá en el pedido, sin nombres, qué cambió, qué revisar y la evidencia que pida el contrato del componente, como
+     contra qué motor se probó y con qué resultado: el `.json` de la entrega trae solo la huella.
   5. Avisá al lado que recibe.
 - **Outputs.** `~/motores-compartidos/entregas/<componente>-<versión>/`, su `.tar` y su `.json`.
 - **Chequeo.** Automático: la entrega y el barrido frenan ante un nombre o una copia de un repo. Una entrega no se edita: el
