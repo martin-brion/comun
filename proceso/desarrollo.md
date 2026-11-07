@@ -3,7 +3,8 @@
 Un solo job: de una idea o necesidad a una versión confirmada por quien la corre. Vale para el motor, los plugins y los
 módulos de Odoo, y en los dos sentidos. Se repite ante cada cambio a algo que use más de una instalación.
 
-Cada lado sigue este archivo sin cambiarlo. Las rutas propias de cada lado las da su `CONTEXT.md`. Este archivo no las nombra.
+Cada lado sigue este archivo sin cambiarlo. Las rutas propias de cada lado las da el `CONTEXT.md` de la raíz de su workspace.
+Este archivo no las nombra.
 
 - **Lado que corta:** su sesión escribe `motor-chat` y `comun`, y arma las entregas.
 - **Lado que recibe:** toma las entregas y las guarda en sus repos, con su usuario.
@@ -63,7 +64,8 @@ Un solo job: del pedido a una decisión escrita sobre dónde se programa.
 
 Un solo job: del pedido a una rama con el cambio y sus pruebas. Lo hace la sesión del lado que corta.
 
-- **Inputs.** De esta corrida: el pedido. De todas: `AGENTS.md` del repo y el `AGENTS.md` y `CONTRATO.md` del componente.
+- **Inputs.** De esta corrida: el pedido. De todas: `AGENTS.md` del repo y, si los tiene, `AGENTS.md` y `CONTRATO.md`
+  del componente.
 - **NO cargar:** código ni datos del lado que recibe.
 - **Process.**
   1. Rama corta en el repo que toca, con la identidad de ese repo.
@@ -72,7 +74,7 @@ Un solo job: del pedido a una rama con el cambio y sus pruebas. Lo hace la sesi�
      caso inventado en el pedido.
   4. Un módulo de Odoo que cambia datos lleva migración, y su vuelta atrás se prueba en una base aparte.
 - **Outputs.** La rama, con pruebas en verde.
-- **Chequeo.** Automático: `scripts/test.sh` del componente.
+- **Chequeo.** Automático: `scripts/test.sh` del repo y el del componente, si lo tiene.
 - **Punto de commit.** Con las pruebas en verde.
 
 ## 4. Validación — otra mirada
@@ -110,7 +112,7 @@ Un solo job: de la rama revisada a un tag publicado.
 
 Un solo job: del tag a una entrega en la carpeta compartida.
 
-- **Inputs.** De esta corrida: el tag. De todas: la herramienta de entrega del lado que corta, que dice su `CONTEXT.md`.
+- **Inputs.** De esta corrida: el tag. De todas: la herramienta de entrega, en el `CONTEXT.md` de la raíz del lado que corta.
 - **NO cargar:** nada del lado que recibe.
 - **Process.**
   1. Armá la entrega con la herramienta. El motor pide además qué commits ya desplegados trae.
