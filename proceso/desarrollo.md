@@ -51,16 +51,12 @@ Un solo job: del pedido a una decisión escrita sobre dónde se programa.
 - **Inputs.** De esta corrida: el pedido. De todas: la tabla de arriba.
 - **NO cargar:** código del lado que recibe.
 - **Process.**
-  1. Un arreglo a algo que ya está en `motor-chat` o `comun` sigue derecho a la etapa 3, con el freno de origen que ya tenga
-     (paso 4).
+  1. Un arreglo a algo que ya está en `motor-chat` o `comun` sigue derecho a la etapa 3.
   2. Algo nuevo entra en `comun` solo si cumple las tres: lo usan las dos empresas, anda sin nombrar a nadie y se prueba con
      datos inventados. Si falta una, queda en su casa.
   3. Un módulo propio de Odoo pide además mirar si alcanza con uno público y con la licencia a la vista.
-  4. **Freno de origen.** Un componente que nació por una necesidad del lado que recibe se mantiene y se le entrega a ese
-     lado, y frena ahí: no se ofrece a nadie más hasta que el dueño lo libere por escrito en el pedido.
 - **Outputs.** Respuesta en el pedido: dónde va y por qué.
-- **Chequeo.** Humano: el dueño da el OK de cada componente nuevo en `comun` y de cada liberación del freno de origen.
-  Lo demás avanza solo.
+- **Chequeo.** Humano: el dueño da el OK de cada componente nuevo en `comun`. Lo demás avanza solo.
 - **Punto de commit.** Ninguno.
 
 ## 3. Desarrollo — el cambio, probado
