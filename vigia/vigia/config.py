@@ -14,9 +14,12 @@ _CLAVES = {"servidores", "propias", "componentes", "por_defecto", "maduracion_di
            "espera_salud_s", "aviso"}
 _COMPONENTE = {"nivel", "expuesto", "linea", "base", "nota", "playbook"}
 # Los tipos de acción que el ejecutor sabe hacer, y las acciones con nombre que cada uno le pide a la instancia.
-PLAYBOOKS = {"imagen": ("respaldo_vigente", "aplicar_imagen", "verificar", "volver_imagen")}
+PLAYBOOKS = {"imagen": ("respaldo_vigente", "aplicar_imagen", "verificar", "volver_imagen"),
+             "datos": ("respaldo_vigente", "respaldar_datos", "aplicar_imagen", "verificar", "restaurar_datos",
+                       "volver_imagen")}
 ACCIONES = {"respaldo_vigente": (), "aplicar_imagen": ("servicio", "referencia"), "verificar": ("servicio",),
-            "volver_imagen": ("servicio", "referencia")}
+            "volver_imagen": ("servicio", "referencia"), "respaldar_datos": ("servicio", "marca"),
+            "restaurar_datos": ("servicio", "marca")}
 _HORA = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 

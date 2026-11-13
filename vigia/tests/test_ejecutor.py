@@ -17,6 +17,8 @@ ACCIONES = {"respaldo_vigente": ["accion", "respaldo"],
             "aplicar_imagen": ["accion", "aplicar", "{servicio}", "{referencia}"],
             "verificar": ["accion", "verificar", "{servicio}"],
             "volver_imagen": ["accion", "volver", "{servicio}", "{referencia}"]}
+CON_DATOS = dict(ACCIONES, respaldar_datos=["accion", "respaldar", "{servicio}", "{marca}"],
+                 restaurar_datos=["accion", "restaurar", "{servicio}", "{marca}"])
 
 
 class Corte(Exception):
@@ -36,12 +38,23 @@ class Servidor:
         self.corte = None                           # ("antes" | "despues", servicio): muere al aplicar
         self.medible = True
         self.originales = dict(servicios)
+        # Los datos de cada servicio: con qué imagen se escribieron por última vez. Una imagen nueva los migra al
+        # arrancar, y la anterior ya no los entiende.
+        self.con_datos = set()                      # servicios que migran sus datos al cambiar de imagen
+        self.formato = dict(servicios)
+        self.copias = {}                          # (servicio, marca) -> formato copiado
+        self.detenidos = set()
+        self.falla_respaldar = set()
+        self.falla_restaurar = set()
+        self.corta = {}                             # "respaldar" | "restaurar" -> "antes" | "despues": muere ahí
 
     def tomar(self, servidor, ahora, vigencia):
         if not self.medible:
             return {"nombre": servidor["nombre"], "estado": "desconocido", "motivo": "el lector no respondió", "foto": None}
         contenedores, imagenes = [], {}
         for i, (nombre, ref) in enumerate(sorted(self.servicios.items())):
+            if nombre in self.detenidos:
+                continue
             huella = ref.rpartition("@")[2]
             numero = int(huella[-8:], 16)
             contenedores.append((nombre, ref, numero))
@@ -63,17 +76,40 @@ class Servidor:
             if servicio in self.falla_aplicar:
                 return 1
             self.servicios[servicio] = ref
+            if servicio in self.con_datos:
+                self.formato[servicio] = ref
+            self.detenidos.discard(servicio)
             if self.corte == ("despues", servicio):
                 raise Corte()
             return 0
         if orden == "verificar":
+            if resto[0] in self.detenidos or (resto[0] in self.con_datos
+                                              and self.formato[resto[0]] != self.servicios[resto[0]]):
+                return 1                            # detenido, o una imagen sobre datos de otra versión
             nueva = self.servicios[resto[0]] != self.originales[resto[0]]
             return 1 if (nueva and resto[0] in self.falla_verificar) else 0
         if orden == "volver":
             servicio, ref = resto
             if servicio in self.falla_volver:
                 return 1
-            self.servicios[servicio] = ref
+            self.servicios[servicio] = ref           # la imagen vuelve; los datos quedan como estaban
+            self.detenidos.discard(servicio)
+            return 0
+        if orden in ("respaldar", "restaurar"):
+            servicio, marca = resto
+            if self.corta.get(orden) == "antes":
+                raise Corte()
+            self.detenidos.add(servicio)             # las dos dejan el servicio detenido
+            if self.corta.get(orden) == "despues":
+                raise Corte()
+            if orden == "respaldar":
+                if servicio in self.falla_respaldar:
+                    return 1
+                self.copias[(servicio, marca)] = self.formato[servicio]
+                return 0
+            if servicio in self.falla_restaurar or (servicio, marca) not in self.copias:
+                return 1
+            self.formato[servicio] = self.copias[(servicio, marca)]
             return 0
         return 1
 
@@ -335,7 +371,145 @@ class Cortes(Base):
         self.assertEqual(self.s.llamadas, [])
 
 
+class Datos(Base):
+    """Una pieza que migra sus datos al actualizarse: copia antes, y la vuelta atrás repone esa copia."""
+
+    def setUp(self):
+        super().setUp()
+        self.cfg = self.config(componentes={PG: {"nivel": "patch", "playbook": "datos"}},
+                               acciones={"principal": CON_DATOS}, playbooks=["datos"])
+        self.s.con_datos = {"db"}
+
+    def pasos(self):
+        return [(e["paso"], e["resultado"]) for e in estado.diario(self.db())]
+
+    def test_copia_antes_de_aplicar_y_cierra(self):
+        acta = self.aplicar(presente=True)
+        self.assertEqual(acta["pasos"][0]["resultado"], "aplicada")
+        self.assertEqual(self.ordenes(), ["respaldo", "respaldar", "aplicar", "verificar"])
+        marca = self.s.llamadas[1][2]
+        self.assertRegex(marca, r"^m\d{10}$")
+        self.assertEqual(self.s.llamadas[1], ["respaldar", "db", marca])
+        self.assertEqual(self.pasos(), [("respaldar", "hecho"), ("aplicar", "hecho")])
+        self.assertEqual(estado.diario(self.db())[1]["datos"]["marca"], marca)
+        self.assertEqual((self.s.servicios["db"], self.s.formato["db"]), (f"{PG}:16.16@{H2}",) * 2)
+        self.assertTrue(estado.estrenado(self.db(), "datos"))
+        self.assertFalse(estado.estrenado(self.db(), "imagen"))
+
+    def test_la_copia_queda_escrita_en_el_diario_antes_de_hacerse(self):
+        vistos = []
+        original = self.s.correr
+
+        def espiar(argv, tope):
+            if argv[1] in ("respaldar", "restaurar"):
+                vistos.append(self.pasos())
+            return original(argv, tope)
+        self.s.correr = espiar
+        self.s.falla_verificar = {"db"}
+        self.aplicar(presente=True)
+        self.assertEqual(vistos, [[("respaldar", None)],
+                                  [("respaldar", "hecho"), ("aplicar", "fallo"), ("restaurar", None)]])
+
+    def test_si_no_verifica_repone_la_copia_de_ese_intento_y_despues_vuelve(self):
+        self.s.falla_verificar = {"db"}
+        acta = self.aplicar(presente=True)
+        self.assertEqual(acta["pasos"][0]["resultado"], "falló; quedó como estaba")
+        self.assertEqual(self.ordenes(), ["respaldo", "respaldar", "aplicar", "verificar", "restaurar", "volver", "verificar"])
+        self.assertEqual(self.s.llamadas[4], ["restaurar", "db", self.s.llamadas[1][2]])     # la misma marca, no «la última»
+        self.assertEqual((self.s.servicios["db"], self.s.formato["db"]), (f"postgres:16.15@{H}",) * 2)
+        self.assertEqual(self.s.detenidos, set())
+        self.assertEqual(self.pasos(), [("respaldar", "hecho"), ("aplicar", "fallo"), ("restaurar", "hecho"), ("volver", "hecho")])
+        self.assertEqual(self.candidata()["estado"], "esperando")
+        self.assertFalse(estado.estrenado(self.db(), "datos"))
+
+    def test_con_el_tipo_imagen_esa_misma_pieza_no_podria_volver(self):
+        # Lo que el tipo `datos` evita: volver solo la imagen deja una versión vieja sobre datos ya migrados.
+        cfg = self.config(componentes={PG: {"nivel": "patch", "playbook": "imagen"}})
+        self.s.falla_verificar = {"db"}
+        acta = self.aplicar(presente=True, cfg=cfg)
+        self.assertEqual(acta["pasos"][0]["resultado"], "falló y la vuelta atrás también")
+
+    def test_si_la_copia_falla_no_aplica_y_levanta_lo_que_habia(self):
+        self.s.falla_respaldar = {"db"}
+        acta = self.aplicar(presente=True)
+        self.assertEqual(acta["pasos"][0]["resultado"], "falló; quedó como estaba")
+        self.assertEqual(self.ordenes(), ["respaldo", "respaldar", "volver", "verificar"])       # nunca aplicó
+        self.assertEqual((self.s.servicios["db"], self.s.detenidos), (f"postgres:16.15@{H}", set()))
+        self.assertEqual(self.pasos(), [("respaldar", "fallo"), ("volver", "hecho")])
+        self.assertEqual(self.candidata()["estado"], "esperando")
+
+    def test_dos_copias_fallidas_escalan(self):
+        self.s.falla_respaldar = {"db"}
+        self.aplicar(presente=True)
+        self.ahora = AHORA + 7 * DIA
+        self.aplicar(presente=True)
+        self.assertEqual(self.candidata()["estado"], "escalada")
+        self.assertEqual([i["clase"] for i in estado.incidentes(self.db())], ["no entró"])
+
+    def test_si_la_restauracion_falla_no_levanta_la_imagen_vieja_y_frena(self):
+        self.s.falla_verificar = {"db"}
+        self.s.falla_restaurar = {"db"}
+        acta = self.aplicar(presente=True)
+        self.assertEqual(acta["pasos"][0]["resultado"], "falló y la vuelta atrás también")
+        self.assertEqual(self.ordenes()[-1], "restaurar")                # no llamó a volver sobre datos migrados
+        self.assertIn("se frenó la ventana", acta["motivo"])
+        self.assertEqual(self.candidata()["estado"], "escalada")
+        self.assertEqual([i["clase"] for i in estado.incidentes(self.db())], ["vuelta atrás fallida"])
+
+    def test_el_estreno_es_por_tipo_de_accion(self):
+        estado.estrenar(self.db(), "imagen", "otra", AHORA)
+        (paso,) = self.aplicar()["pasos"]
+        self.assertEqual([n for n, ok, _ in paso["compuertas"] if not ok], ["estreno"])
+        self.assertEqual(self.s.llamadas, [])
+
+    def test_sin_las_acciones_de_datos_definidas_no_se_toca(self):
+        (paso,) = self.aplicar(presente=True, cfg=self.config(
+            componentes={PG: {"nivel": "patch", "playbook": "datos"}}, playbooks=["datos"]))["pasos"]
+        self.assertIn(("acciones", False, "faltan: respaldar_datos, restaurar_datos"), paso["compuertas"])
+        self.assertEqual(self.s.llamadas, [])
+
+    def cortar(self, orden, cuando):
+        self.s.corta = {orden: cuando}
+        with self.assertRaises(Corte):
+            self.aplicar(presente=True)
+        self.s.corta = {}
+        self.s.llamadas.clear()
+
+    def test_corte_antes_de_copiar_no_toco_nada_y_se_reintenta(self):
+        self.cortar("respaldar", "antes")
+        acta = self.aplicar(presente=True)
+        self.assertEqual(estado.diario(self.db())[0]["resultado"], "no aplicado")
+        self.assertEqual(acta["pasos"][0]["resultado"], "aplicada")
+
+    def test_corte_durante_la_copia_con_el_servicio_detenido_es_ambiguo(self):
+        self.cortar("respaldar", "despues")
+        acta = self.aplicar(presente=True)
+        self.assertEqual(self.s.llamadas, [])                            # no lo levanta a ciegas
+        self.assertIn("a medias", acta["motivo"])
+        self.assertEqual(self.candidata()["estado"], "escalada")
+        (i,) = estado.incidentes(self.db())
+        self.assertIn("puede estar detenido", i["texto"])
+        self.assertRegex(i["texto"], r"marca m\d{10}\.")
+
+    def test_corte_durante_la_restauracion_es_siempre_ambiguo(self):
+        self.s.falla_verificar = {"db"}
+        self.cortar("restaurar", "antes")                                # el servicio sigue corriendo con la nueva
+        self.aplicar(presente=True)
+        self.assertEqual(self.s.llamadas, [])
+        self.assertEqual(self.pasos()[-1], ("restaurar", "ambiguo"))
+        self.assertEqual(self.candidata()["estado"], "escalada")
+
+
 class Acciones(Base):
+    def test_la_marca_de_una_copia_tambien_se_valida(self):
+        cfg = self.config(acciones={"principal": CON_DATOS})
+        llamadas = []
+        correr = lambda argv, tope: llamadas.append(argv) or 0
+        self.assertTrue(ejecutor.accion(cfg, "principal", "restaurar_datos", {"servicio": "db", "marca": "m1800000000"}, correr))
+        for mal in ("ultima", "m1800000000; rm", "../m1800000000", "", None):
+            self.assertFalse(ejecutor.accion(cfg, "principal", "restaurar_datos", {"servicio": "db", "marca": mal}, correr), mal)
+        self.assertEqual(llamadas, [["accion", "restaurar", "db", "m1800000000"]])
+
     def test_los_valores_se_validan_antes_de_armar_el_comando(self):
         llamadas = []
         correr = lambda argv, tope: llamadas.append(argv) or 0

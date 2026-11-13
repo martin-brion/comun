@@ -1,6 +1,6 @@
 # Contrato de vigia
 
-Versión del contrato: 0.2.0-dev.1. Lo que sigue no cambia sin decirlo en el pedido antes de cortar.
+Versión del contrato: 0.3.0-dev.1. Lo que sigue no cambia sin decirlo en el pedido antes de cortar.
 
 ## 1. Reglas que no se negocian
 
@@ -28,6 +28,7 @@ Versión del contrato: 0.2.0-dev.1. Lo que sigue no cambia sin decirlo en el ped
 12. **Un corte no se resuelve repitiendo.** Lo que quedó a medias se mide: si ya corre lo nuevo, hecho; si sigue lo
     anterior, no aplicado; si no se puede saber, se escala y en ese servidor no se aplica nada más.
 13. **Sin vuelta atrás exacta no se aplica.** Hace falta la referencia con huella de lo que corre hoy.
+    Una pieza con datos, además, se copia antes bajo una marca de ese intento, y solo esa copia se repone.
 14. **El estreno es con el dueño.** La primera aplicación de cada tipo de acción pide `--presente`. Un estreno que falla
     no cuenta.
 15. **Nada por silencio.** Sin ventana definida, sin tipo de acción habilitado o con el archivo `PAUSA`, no aplica.
@@ -92,8 +93,16 @@ Códigos de salida de `python -m vigia`: 0 bien, 1 sin corrida previa, 2 configu
 
 ## 6. El ejecutor
 
-**Tipos de acción.** `imagen`: reemplaza la imagen de un servicio de compose por otra fijada por huella. Su vuelta atrás
-es la imagen anterior, así que **no vale para una pieza que migra datos al actualizarse**.
+**Tipos de acción.**
+
+- `imagen`: reemplaza la imagen de un servicio de compose por otra fijada por huella. Su vuelta atrás es la imagen
+  anterior, así que **no vale para una pieza que migra datos al actualizarse**.
+- `datos`: lo mismo, para una pieza que guarda datos. Antes de aplicar llama `respaldar_datos` con una marca propia de
+  ese intento. Si la versión nueva falla, llama `restaurar_datos` con esa misma marca y recién después `volver_imagen`:
+  la imagen anterior nunca arranca sobre datos que la nueva ya migró. Cada tipo tiene su propio estreno.
+
+El respaldo es de la instancia. El vigía pide por nombre (¿hay uno vigente?, copiá esto, reponé esto) y no sabe qué
+sistema responde: cambiar de servicio de respaldo es cambiar los comandos de `acciones`.
 
 **Acciones con nombre** (por servidor, en `acciones`):
 
@@ -103,9 +112,23 @@ es la imagen anterior, así que **no vale para una pieza que migra datos al actu
 | `aplicar_imagen` | `{servicio}`, `{referencia}` | Deja el servicio corriendo con esa imagen. Repetirla con los mismos valores no cambia nada. |
 | `verificar` | `{servicio}` | Cero solo si el servicio funciona de verdad. |
 | `volver_imagen` | `{servicio}`, `{referencia}` | Deja el servicio corriendo con la imagen anterior. |
+| `respaldar_datos` | `{servicio}`, `{marca}` | Detiene el servicio, copia sus datos bajo esa marca, comprueba la copia y lo deja **detenido**. Cero solo con la copia comprobada. |
+| `restaurar_datos` | `{servicio}`, `{marca}` | Detiene el servicio, repone los datos de esa marca y lo deja **detenido**. Cero solo si quedaron repuestos. Sin esa marca, falla: nunca repone otra copia. |
 
-`{servicio}` es el nombre del servicio de compose (`^[a-z0-9][a-z0-9_.-]{0,62}$`); `{referencia}`, una imagen con huella.
-Una acción tiene 15 minutos; pasado ese tiempo cuenta como falla.
+`{servicio}` es el nombre del servicio de compose (`^[a-z0-9][a-z0-9_.-]{0,62}$`); `{referencia}`, una imagen con huella;
+`{marca}`, un identificador que pone el vigía (`^m[0-9]{9,12}$`). Una acción tiene 15 minutos; pasado ese tiempo cuenta
+como falla.
+
+Con `datos`, lo que el servicio haya escrito entre la copia y la restauración se pierde: por eso la copia se toma con el
+servicio detenido y justo antes. Retirar copias viejas es de la instancia, y nunca la de un intento que quedó a medias.
+
+**Orden de un intento con `datos`.** `respaldar_datos` → `aplicar_imagen` → sano con la huella pedida → `verificar`. Si la
+copia falla, no aplica: `volver_imagen` levanta lo que había. Si falla después, `restaurar_datos` → `volver_imagen` →
+sano → `verificar`. Si la restauración falla, no levanta la imagen anterior: escala y frena la ventana.
+
+**Tras un corte.** Una copia a medias con el servicio corriendo lo de siempre es «no aplicado». Una copia a medias con el
+servicio detenido, o una restauración a medias, es ambiguo: no se mide cómo quedaron los datos desde afuera. El aviso
+dice la marca de la copia de ese intento.
 
 **Compuertas**, en este orden; la primera que frena deja la candidata «bloqueada» y el acta dice cuál:
 

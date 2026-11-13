@@ -29,7 +29,7 @@ Solo biblioteca estándar de Python (3.9 en adelante). No es un plugin del bot: 
    definidas, estreno, imagen fija por huella, vuelta atrás exacta, servicios, sin escalar y respaldo vigente.
 5. Para cada servicio que usa la imagen: deja la intención en el diario, llama `aplicar_imagen`, espera a que el servicio
    corra **con esa imagen** y esté sano, y llama `verificar`. Si algo falla, llama `volver_imagen` con la referencia
-   exacta que había y verifica de nuevo.
+   exacta que había y verifica de nuevo. Una pieza con datos se copia antes y, si falla, se repone esa copia primero.
 6. Deja un acta con cada compuerta y, si hace falta una persona, un aviso.
 
 Lo que no se pudo saber queda «desconocido». Nunca «al día», nunca «cero vulnerabilidades».
@@ -44,16 +44,28 @@ Nada en un servidor. Llama **acciones con nombre**, de una lista cerrada, que la
 | `aplicar_imagen` | `{servicio}`, `{referencia}` | dejar ese servicio corriendo con esa imagen fijada por huella |
 | `verificar` | `{servicio}` | probar que el servicio funciona de verdad, no solo que arrancó |
 | `volver_imagen` | `{servicio}`, `{referencia}` | dejarlo corriendo con la imagen anterior |
+| `respaldar_datos` | `{servicio}`, `{marca}` | detener el servicio, copiar sus datos bajo esa marca, comprobar la copia y dejarlo detenido |
+| `restaurar_datos` | `{servicio}`, `{marca}` | detenerlo, reponer exactamente esa copia y dejarlo detenido |
 
 La salida de una acción no se guarda: solo si salió con cero. Los valores se validan antes de armar el comando.
 
-Hoy hay un solo tipo de acción (`playbook`): `imagen`, para un servicio cuya vuelta atrás es volver a la imagen anterior.
-**No sirve para una pieza que migra datos al actualizarse** (una base, un servidor de chat, un forge): volver a la imagen
-no deshace la migración. Esas piden su propio tipo, con respaldo y restauración, y Odoo pide además su ensayo en la copia.
+Dos tipos de acción (`playbook`):
+
+- `imagen`, para un servicio cuya vuelta atrás es volver a la imagen anterior. **No sirve para una pieza que migra datos
+  al actualizarse** (una base, un servidor de chat, un forge): volver a la imagen no deshace la migración.
+- `datos`, para esas piezas. Copia los datos del servicio justo antes, con una marca de ese intento. Si la versión nueva
+  falla, repone esa copia y después levanta la imagen anterior. Usa las seis acciones.
+
+**Dos capas de respaldo.** `respaldo_vigente` mira el respaldo general (la copia de la máquina o del servidor entero): es
+la condición para empezar. La copia del tipo `datos` es la vuelta atrás de un solo servicio. El vigía no sabe qué
+sistema hay detrás de ninguna de las dos: lo dicen los comandos de la instancia, y cambiar de servicio de respaldo es
+cambiar esas líneas.
+
+Odoo pide además su ensayo en la copia de pruebas: todavía no está.
 
 ## Lo que todavía no hace
 
-- Piezas con datos y Odoo: ensayo en la copia de pruebas con batería antes y después, y restauración como vuelta atrás.
+- Odoo: ensayo en la copia de pruebas con batería antes y después.
 - Ventanas extraordinarias para una urgencia; reinicio del servidor; paquetes del sistema fuera de la rutina desatendida.
 - Mirar los addons de Odoo montados desde un repositorio y las dependencias de las aplicaciones propias.
 - Pedir un dictamen al modelo (que solo podría frenar).
@@ -104,4 +116,5 @@ calendario: con `linea: 1`, de `2026.10.0` a `2026.11.0` es un parche.
 `bash scripts/test.sh`. Datos inventados, sin red y sin tocar ningún servidor. Cubren: versiones y referencias, la foto
 y su limpieza, las fuentes con una red de mentira, el análisis, el estado entre corridas, el escáner, la corrida entera y
 el ejecutor contra un servidor de mentira: compuertas, intención antes del efecto, falla con vuelta atrás, vuelta atrás
-fallida, corte a mitad de camino sin repetir la acción, tope y un servidor por ventana.
+fallida, corte a mitad de camino sin repetir la acción, tope y un servidor por ventana; y el tipo `datos`: copia antes,
+restauración de esa copia exacta, copia fallida, restauración fallida y cortes durante la copia y la restauración.

@@ -25,7 +25,8 @@
   },
   "componentes": {
     "docker.io/library/postgres": {
-      "nivel": "patch"
+      "nivel": "patch",
+      "playbook": "datos"
     },
     "docker.io/library/odoo": {
       "nivel": "nunca",
@@ -71,7 +72,8 @@
     "hasta": "05:00"
   },
   "playbooks": [
-    "imagen"
+    "imagen",
+    "datos"
   ],
   "acciones": {
     "principal": {
@@ -95,6 +97,18 @@
         "volver-imagen",
         "{servicio}",
         "{referencia}"
+      ],
+      "respaldar_datos": [
+        "/usr/local/sbin/vigia-accion",
+        "respaldar-datos",
+        "{servicio}",
+        "{marca}"
+      ],
+      "restaurar_datos": [
+        "/usr/local/sbin/vigia-accion",
+        "restaurar-datos",
+        "{servicio}",
+        "{marca}"
       ]
     }
   },

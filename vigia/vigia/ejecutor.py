@@ -4,6 +4,9 @@ No sabe hacer nada por sí mismo en un servidor: llama acciones con nombre, de u
 como comandos en lista (nunca una línea de shell). Antes de cada efecto deja la intención en el diario; después, el
 resultado. Si algo falla, vuelve atrás con la referencia exacta que había. Tras un corte mira qué quedó a medias y lo
 resuelve midiendo: nunca repite una acción a ciegas.
+
+Dos tipos de acción: `imagen` (la vuelta atrás es la imagen anterior) y `datos` (antes copia los datos del servicio bajo
+una marca de ese intento; la vuelta atrás repone esa copia exacta y recién después levanta la imagen anterior).
 """
 import os
 import re
@@ -14,6 +17,8 @@ from . import censo, config as _config, corrida, escaner, estado, fuentes, infor
 
 _SERVICIO = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
 _FIJA = re.compile(r"^[a-z0-9][A-Za-z0-9._/:-]{0,299}@(sha256:[0-9a-f]{64})$")
+_MARCA = re.compile(r"^m[0-9]{9,12}$")
+_PATRON = {"servicio": _SERVICIO, "referencia": _FIJA, "marca": _MARCA}
 MAX_FALLAS = 2
 PASO_S = 10
 
@@ -33,8 +38,7 @@ def accion(cfg, servidor, nombre, valores, correr, tope=900):
     if plantilla is None:
         return None
     for campo in _config.ACCIONES[nombre]:
-        patron = _SERVICIO if campo == "servicio" else _FIJA
-        if not isinstance(valores.get(campo), str) or not patron.match(valores[campo]):
+        if not isinstance(valores.get(campo), str) or not _PATRON[campo].match(valores[campo]):
             return False
     return correr([x.format(**valores) for x in plantilla], tope) == 0
 
@@ -109,11 +113,38 @@ def _sano(cfg, servidor, servicio, huella, tomar, reloj, dormir):
         dormir(PASO_S)
 
 
-def _aplicar_servicio(cfg, db, servidor, c, servicio, tomar, correr, reloj, dormir):
-    """«hecho», «vuelto» (falló y quedó como estaba) o «roto» (falló y la vuelta atrás también)."""
+def _volver(cfg, db, servidor, c, servicio, tomar, correr, reloj, dormir):
+    """Deja el servicio con la imagen anterior y lo verifica. «vuelto» si quedó como estaba; si no, «roto»."""
     nombre = servidor["nombre"]
-    n = estado.intencion(db, c["id"], nombre, "aplicar", {"servicio": servicio, "de": c["anterior"], "a": c["referencia"]},
-                         int(reloj()))
+    m = estado.intencion(db, c["id"], nombre, "volver", {"servicio": servicio, "a": c["anterior"]}, int(reloj()))
+    vuelta = accion(cfg, nombre, "volver_imagen", {"servicio": servicio, "referencia": c["anterior"]}, correr) is True
+    vuelta = vuelta and _sano(cfg, servidor, servicio, _FIJA.match(c["anterior"]).group(1), tomar, reloj, dormir)
+    vuelta = vuelta and accion(cfg, nombre, "verificar", {"servicio": servicio}, correr) is True
+    estado.resultado(db, m, "hecho" if vuelta else "fallo", "", int(reloj()))
+    return "vuelto" if vuelta else "roto"
+
+
+def _aplicar_servicio(cfg, db, servidor, c, servicio, playbook, tomar, correr, reloj, dormir):
+    """«hecho», «vuelto» (falló y quedó como estaba) o «roto» (falló y la vuelta atrás también).
+
+    Con el tipo `datos` copia antes los datos del servicio bajo una marca propia de este intento y, si la versión nueva
+    falla, repone esa copia ANTES de levantar la imagen anterior: la imagen vieja no arranca sobre datos ya migrados."""
+    nombre = servidor["nombre"]
+    marca = None
+    if playbook == "datos":
+        marca = f"m{int(reloj())}"
+        n = estado.intencion(db, c["id"], nombre, "respaldar", {"servicio": servicio, "de": c["anterior"], "marca": marca},
+                             int(reloj()))
+        copiado = accion(cfg, nombre, "respaldar_datos", {"servicio": servicio, "marca": marca}, correr) is True
+        estado.resultado(db, n, "hecho" if copiado else "fallo",
+                         "" if copiado else "no se pudo copiar; la versión nueva no llegó a correr", int(reloj()))
+        if not copiado:
+            # La copia deja el servicio detenido: se lo levanta con lo que tenía. Sus datos no cambiaron.
+            return _volver(cfg, db, servidor, c, servicio, tomar, correr, reloj, dormir)
+    intento = {"servicio": servicio, "de": c["anterior"], "a": c["referencia"]}
+    if marca:
+        intento["marca"] = marca
+    n = estado.intencion(db, c["id"], nombre, "aplicar", intento, int(reloj()))
     bien = accion(cfg, nombre, "aplicar_imagen", {"servicio": servicio, "referencia": c["referencia"]}, correr) is True
     bien = bien and _sano(cfg, servidor, servicio, c["indice"], tomar, reloj, dormir)
     bien = bien and accion(cfg, nombre, "verificar", {"servicio": servicio}, correr) is True
@@ -121,12 +152,13 @@ def _aplicar_servicio(cfg, db, servidor, c, servicio, tomar, correr, reloj, dorm
         estado.resultado(db, n, "hecho", "", int(reloj()))
         return "hecho"
     estado.resultado(db, n, "fallo", "no aplicó o no pasó la verificación", int(reloj()))
-    m = estado.intencion(db, c["id"], nombre, "volver", {"servicio": servicio, "a": c["anterior"]}, int(reloj()))
-    vuelta = accion(cfg, nombre, "volver_imagen", {"servicio": servicio, "referencia": c["anterior"]}, correr) is True
-    vuelta = vuelta and _sano(cfg, servidor, servicio, _FIJA.match(c["anterior"]).group(1), tomar, reloj, dormir)
-    vuelta = vuelta and accion(cfg, nombre, "verificar", {"servicio": servicio}, correr) is True
-    estado.resultado(db, m, "hecho" if vuelta else "fallo", "", int(reloj()))
-    return "vuelto" if vuelta else "roto"
+    if marca:
+        r = estado.intencion(db, c["id"], nombre, "restaurar", {"servicio": servicio, "marca": marca}, int(reloj()))
+        repuesto = accion(cfg, nombre, "restaurar_datos", {"servicio": servicio, "marca": marca}, correr) is True
+        estado.resultado(db, r, "hecho" if repuesto else "fallo", "", int(reloj()))
+        if not repuesto:
+            return "roto"
+    return _volver(cfg, db, servidor, c, servicio, tomar, correr, reloj, dormir)
 
 
 def recuperar(cfg, db, tomar, reloj):
@@ -139,25 +171,33 @@ def recuperar(cfg, db, tomar, reloj):
         servidor = por_nombre.get(e["servidor"])
         foto, suyos = _mide(cfg, servidor, e["datos"]["servicio"], tomar, reloj) if servidor else (None, None)
         huellas = [_huella(foto, c) for c in suyos] if suyos else []
-        destino = _FIJA.match(e["datos"]["a"]).group(1)
 
-        def todos(huella):
-            return bool(huellas) and all(huella in h for h in huellas)
-        if e["paso"] == "aplicar" and todos(destino):
+        def todos(clave):
+            fija = _FIJA.match(e["datos"].get(clave) or "")
+            return bool(fija) and bool(huellas) and all(fija.group(1) in h for h in huellas)
+        if e["paso"] == "respaldar" and todos("de"):
+            # La copia no terminó, pero el servicio corre con lo de siempre: sus datos no se tocaron.
+            estado.resultado(db, e["n"], "no aplicado", "recuperado tras un corte: la copia no terminó y seguía la versión "
+                             "anterior", ahora)
+            estado.pasar(db, e["candidata"], "detectada", "", ahora)
+        elif e["paso"] == "aplicar" and todos("a"):
             estado.resultado(db, e["n"], "hecho", "recuperado tras un corte: ya corría la versión nueva", ahora)
             estado.pasar(db, e["candidata"], "detectada", "", ahora)
-        elif e["paso"] == "aplicar" and todos(_FIJA.match(e["datos"]["de"]).group(1)):
+        elif e["paso"] == "aplicar" and todos("de"):
             estado.resultado(db, e["n"], "no aplicado", "recuperado tras un corte: seguía la versión anterior", ahora)
             estado.pasar(db, e["candidata"], "detectada", "", ahora)
-        elif e["paso"] == "volver" and todos(destino):
+        elif e["paso"] == "volver" and todos("a"):
             estado.resultado(db, e["n"], "hecho", "recuperado tras un corte: ya había vuelto", ahora)
             estado.pasar(db, e["candidata"], "esperando", "un intento falló y se volvió atrás", ahora)
         else:
+            # Una restauración a medias cae siempre acá: cómo quedaron los datos no se puede medir desde afuera.
             estado.resultado(db, e["n"], "ambiguo", "tras un corte no se pudo saber cómo quedó", ahora)
             estado.pasar(db, e["candidata"], "escalada", "quedó a medias tras un corte", ahora)
+            copia = f" Su copia de ese intento lleva la marca {e['datos']['marca']}." if e["datos"].get("marca") else ""
             estado.incidente(db, f"ambiguo-{e['candidata']}", "a medias",
-                             f"En {e['servidor']}, el servicio {e['datos']['servicio']} quedó a medias tras un corte y no "
-                             "se pudo saber con qué versión corre. No se aplica nada más ahí hasta revisarlo.", ahora)
+                             f"En {e['servidor']}, el servicio {e['datos']['servicio']} quedó a medias tras un corte "
+                             f"(paso: {e['paso']}) y no se pudo saber cómo quedó; puede estar detenido.{copia} No se "
+                             "aplica nada más ahí hasta revisarlo.", ahora)
             ambiguos.add(e["servidor"])
     return ambiguos
 
@@ -216,7 +256,8 @@ def aplicar(cfg, presente=False, tomar=censo.tomar, pedir=fuentes.pedir, escanea
             estado.pasar(db, c["id"], "aplicando", "", int(reloj()))
             resultado = "hecho"
             for servicio in _servicios(pieza):
-                resultado = _aplicar_servicio(cfg, db, servidor, c, servicio, tomar, correr, reloj, dormir)
+                resultado = _aplicar_servicio(cfg, db, servidor, c, servicio, pieza["playbook"], tomar, correr, reloj,
+                                              dormir)
                 if resultado != "hecho":
                     break
             ahora = int(reloj())
@@ -228,8 +269,8 @@ def aplicar(cfg, presente=False, tomar=censo.tomar, pedir=fuentes.pedir, escanea
                 for clase in ("fallo", "plazo"):
                     estado.cerrar_incidente(db, f"{clase}-{c['id']}", ahora)
             elif resultado == "vuelto":
-                fallas = sum(1 for e in estado.diario(db) if e["candidata"] == c["id"] and e["paso"] == "aplicar"
-                             and e["resultado"] == "fallo")
+                fallas = sum(1 for e in estado.diario(db) if e["candidata"] == c["id"]
+                             and e["paso"] in ("aplicar", "respaldar") and e["resultado"] == "fallo")
                 paso["resultado"] = "falló; quedó como estaba"
                 if fallas >= MAX_FALLAS:
                     estado.pasar(db, c["id"], "escalada", f"no entró en {fallas} intentos", ahora)
