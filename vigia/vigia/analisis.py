@@ -63,13 +63,18 @@ def _resolver(tag, locales, etiquetas):
     return None, True
 
 
-def _pieza(cfg, servidor, ref, imagen, imagen_id, contenedores, consultar, detalle, ahora):
+def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar, detalle, ahora):
     comp = _config.componente(cfg, ref.pieza)
+    servicios = sorted({f"{c['proyecto']}/{c['servicio']}" for c in contenedores if c["proyecto"] and c["servicio"]})
+    contenedores = [c["nombre"] for c in contenedores]
+    # La referencia exacta para volver atrás: la que tiene el servicio hoy, con su huella.
+    anterior = texto if ref.digest else next((f"{texto}@{d.rpartition('@')[2]}" for d in imagen.get("digests", [])), None)
     locales = {d.rpartition("@")[2] for d in imagen.get("digests", [])} | ({ref.digest} if ref.digest else set())
     r = {"servidor": servidor, "pieza": ref.pieza, "contenedores": sorted(contenedores), "etiqueta": ref.tag,
          "fijada": bool(ref.digest), "actual": None, "estado": "desconocido", "motivo": "", "candidata": None,
          "otras": [], "notas": [], "nivel": comp["nivel"], "expuesto": comp["expuesto"], "propia": False,
-         "creada": imagen.get("creada", "")[:19], "imagen_id": imagen_id}
+         "creada": imagen.get("creada", "")[:19], "imagen_id": imagen_id, "servicios": servicios,
+         "playbook": comp.get("playbook")}
     if es_propia(cfg, ref):
         r.update(propia=True, actual=ref.tag or None, estado="propia")
         base = V.referencia(comp.get("base") or imagen.get("etiquetas", {}).get("org.opencontainers.image.base.name") or "")
@@ -119,7 +124,7 @@ def _pieza(cfg, servidor, ref, imagen, imagen_id, contenedores, consultar, detal
                      if fijas else (ref.tag or "latest"))
         r.update(estado="atrasada", actual=ref.tag or "latest")
         r["candidata"] = _candidata(cfg, servidor, ref, comp, ref.tag or "latest", propuesta, "patch",
-                                    hoy["publicada"], "", ahora)
+                                    hoy["publicada"], "", ahora, hoy.get("indice"), anterior)
         r["candidata"]["nota"] = "la misma etiqueta apunta hoy a una imagen más nueva; no se sabe cuál corre"
         return r
     r["actual"] = actual.texto
@@ -141,17 +146,18 @@ def _pieza(cfg, servidor, ref, imagen, imagen_id, contenedores, consultar, detal
     for tamano in V.SALTOS:
         if tamano in mejores:
             o, e = mejores.pop(tamano)
-            publicada = e["publicada"]
-            if publicada is None and detalle is not None:
-                publicada = (detalle(ref.registro, ref.repo, o.texto) or {}).get("publicada")
+            publicada, indice = e["publicada"], e.get("indice")
+            if (publicada is None or indice is None) and detalle is not None:
+                d = detalle(ref.registro, ref.repo, o.texto) or {}
+                publicada, indice = publicada or d.get("publicada"), indice or d.get("indice")
             r["candidata"] = _candidata(cfg, servidor, ref, comp, actual.texto, o.texto, tamano, publicada,
-                                        actual.variante, ahora)
+                                        actual.variante, ahora, indice, anterior)
             break
     r["otras"] = [{"version": o.texto, "salto": t} for t, (o, _) in sorted(mejores.items(), key=lambda x: V.SALTOS.index(x[0]))]
     return r
 
 
-def _candidata(cfg, servidor, ref, comp, actual, propuesta, tamano, publicada, variante, ahora):
+def _candidata(cfg, servidor, ref, comp, actual, propuesta, tamano, publicada, variante, ahora, indice=None, anterior=None):
     hecha = _fecha(publicada)
     madura = hecha + timedelta(days=cfg["maduracion_dias"]) if hecha else None
     if tamano == "mayor":
@@ -168,7 +174,8 @@ def _candidata(cfg, servidor, ref, comp, actual, propuesta, tamano, publicada, v
         compuerta = "pasaría"
     return {"id": identificador(servidor, ref.pieza, variante, propuesta), "servidor": servidor, "pieza": ref.pieza,
             "actual": actual, "propuesta": propuesta, "salto": tamano, "publicada": _iso(hecha), "madura": _iso(madura),
-            "nivel": comp["nivel"], "expuesto": comp["expuesto"], "compuerta_version": compuerta, "nota": ""}
+            "nivel": comp["nivel"], "expuesto": comp["expuesto"], "compuerta_version": compuerta, "nota": "",
+            "indice": indice, "referencia": f"{ref.pieza}:{propuesta}@{indice}" if indice else None, "anterior": anterior}
 
 
 def piezas(cfg, servidor, foto, consultar, detalle=None, ahora=0):
@@ -177,22 +184,22 @@ def piezas(cfg, servidor, foto, consultar, detalle=None, ahora=0):
         return None
     por_imagen = {}
     for c in foto["contenedores"]:
-        por_imagen.setdefault((c["imagen_ref"], c["imagen_id"]), []).append(c["nombre"])
+        por_imagen.setdefault((c["imagen_ref"], c["imagen_id"]), []).append(c)
     salida = []
-    for (texto, imagen_id), nombres in sorted(por_imagen.items()):
+    for (texto, imagen_id), usan in sorted(por_imagen.items()):
         ref = V.referencia(texto)
         imagen = foto["imagenes"].get(imagen_id, {})
         if ref is None:
             # Un contenedor creado desde un ID de imagen: se usa la primera etiqueta local, si la hay.
             ref = next((x for x in map(V.referencia, imagen.get("tags", [])) if x), None)
         if ref is None:
-            salida.append({"servidor": servidor, "pieza": "(sin referencia)", "contenedores": sorted(nombres),
+            salida.append({"servidor": servidor, "pieza": "(sin referencia)", "contenedores": sorted(c["nombre"] for c in usan),
                            "etiqueta": "", "fijada": False, "actual": None, "estado": "desconocido",
                            "motivo": "el contenedor no dice de qué imagen salió", "candidata": None, "otras": [],
                            "notas": [], "nivel": "nunca", "expuesto": False, "propia": False, "creada": "",
-                           "imagen_id": imagen_id})
+                           "imagen_id": imagen_id, "servicios": [], "playbook": None})
             continue
-        salida.append(_pieza(cfg, servidor, ref, imagen, imagen_id, nombres, consultar, detalle, ahora))
+        salida.append(_pieza(cfg, servidor, ref, texto, imagen, imagen_id, usan, consultar, detalle, ahora))
     return salida
 
 

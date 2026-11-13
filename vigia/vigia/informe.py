@@ -135,6 +135,29 @@ def publicar(registro_dir, corrida):
     return ruta
 
 
+def acta(a):
+    r = [f"# Vigía · ejecutor · {_cuando(a['ts'])}", "",
+         f"- Servidor de esta ventana: {a['servidor'] or 'ninguno'}",
+         f"- Con el dueño presente: {_si(a['presente'])}"]
+    if a["motivo"]:
+        r += [f"- **No siguió:** {a['motivo']}"]
+    aplicadas = [p for p in a["pasos"] if p["resultado"] == "aplicada"]
+    r += [f"- Aplicadas: {len(aplicadas)} de {len(a['pasos'])} candidatas", ""]
+    for p in a["pasos"]:
+        r += [f"## {_corta(p['pieza'])}: {p['de']} → {p['a']} · {p['resultado']}", ""]
+        r += [f"- {'pasa' if ok else '**frena**'} · {nombre}: {detalle}" for nombre, ok, detalle in p.get("compuertas", [])]
+        r += [""]
+    return "\n".join(r)
+
+
+def publicar_acta(registro_dir, a):
+    carpeta = os.path.join(registro_dir, _cuando(a["ts"], "%Y"), _cuando(a["ts"], "%m"))
+    os.makedirs(carpeta, exist_ok=True)
+    ruta = os.path.join(carpeta, _cuando(a["ts"], "%y%m%d-%H%M%S") + "-ejecutor.md")
+    _escribir(ruta, acta(a))
+    return ruta
+
+
 def _escribir(ruta, texto):
     temporal = ruta + ".tmp"
     with open(temporal, "w", encoding="utf-8", newline="\n") as f:

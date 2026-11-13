@@ -1,5 +1,7 @@
 """Una corrida completa: foto de cada servidor, fuentes, análisis, estado y registro. Solo observa."""
 import os
+import re
+import subprocess
 import time
 
 from . import analisis, censo, escaner, estado, fuentes, informe
@@ -27,11 +29,40 @@ def _candado(directorio, ahora):
     return ruta
 
 
+def _avisador(argv, tope):
+    try:
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=tope).returncode
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def avisar(cfg, db, ahora, correr=_avisador):
+    """Deja un archivo por incidente que pide aviso (uno al abrirse y un recordatorio por día) y, si la instancia definió
+    un comando de aviso, se lo pasa. El canal es de la instancia: no puede depender de lo que el vigía actualiza."""
+    carpeta = os.path.join(cfg["estado_dir"], "avisos")
+    rutas = []
+    for i in estado.por_avisar(db, ahora):
+        os.makedirs(carpeta, exist_ok=True)
+        ruta = os.path.join(carpeta, re.sub(r"[^A-Za-z0-9_-]", "-", i["id"]) + ".txt")
+        informe._escribir(ruta, f"Vigía de parches · {i['clase']}\n\n{i['texto']}\n")
+        rutas.append(ruta)
+        if cfg["aviso"]:
+            correr(list(cfg["aviso"]) + [ruta], 120)
+    return rutas
+
+
 def correr(cfg, ahora=None, tomar=censo.tomar, pedir=fuentes.pedir, escanear=escaner.escanear, con_fuentes=True):
     ahora = int(ahora if ahora is not None else time.time())
     candado = _candado(cfg["estado_dir"], ahora)
     try:
-        return _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes)
+        resultado = _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes)
+        db = estado.abrir(cfg["estado_dir"])
+        try:
+            resultado["avisos"] = avisar(cfg, db, ahora)
+        finally:
+            db.close()
+        return resultado
     finally:
         try:
             os.unlink(candado)
@@ -90,6 +121,14 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes):
                         desde = estado.detectada(db, p["candidata"]["id"]) or ahora
                         p["candidata"]["detectada"] = desde
                         p["candidata"]["plazo"] = analisis.plazo(cfg, p["candidata"], p["vulnerabilidades"], desde)
+                        if analisis._fecha(p["candidata"]["plazo"]["vence"]).timestamp() < ahora:
+                            estado.incidente(db, f"plazo-{p['candidata']['id']}", "plazo vencido",
+                                             f"En {servidor['nombre']}, {p['pieza']} sigue en {p['candidata']['actual']}: el "
+                                             f"plazo para pasar a {p['candidata']['propuesta']} venció el "
+                                             f"{p['candidata']['plazo']['vence'][:10]}.", ahora)
+                for identificador in c["cerradas"] + c["descartadas"]:
+                    for clase in ("plazo", "fallo", "roto", "ambiguo"):
+                        estado.cerrar_incidente(db, f"{clase}-{identificador}", ahora)
             servidores.append({"nombre": servidor["nombre"], "estado": "ok", "motivo": "",
                                "sistema": analisis.sistema(foto), "piezas": piezas, "errores": foto["errores"]})
         corrida = {"ts": ahora, "servidores": servidores, "cambios": cambios,

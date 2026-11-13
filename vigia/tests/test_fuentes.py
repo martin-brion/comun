@@ -33,7 +33,7 @@ class DockerHub(unittest.TestCase):
         red = Red().hub("library/postgres", [tag("16.16", "2027-01-10T00:00:00Z", H, H2), tag("16.15", "2026-12-01T00:00:00Z", H3)])
         r = fuentes.docker_hub("library/postgres", red)
         self.assertEqual((r["estado"], r["hay_mas"]), ("ok", False))
-        self.assertEqual(r["etiquetas"][0], {"nombre": "16.16", "publicada": "2027-01-10T00:00:00Z", "digests": sorted([H, H2])})
+        self.assertEqual(r["etiquetas"][0], {"nombre": "16.16", "publicada": "2027-01-10T00:00:00Z", "indice": H, "digests": sorted([H, H2])})
 
     def test_avisa_si_hay_mas_etiquetas_que_las_consultadas(self):
         red = Red().hub("library/postgres", [tag("16.16")], siguiente="https://hub.docker.com/siguiente")
@@ -65,7 +65,7 @@ class RegistroOCI(unittest.TestCase):
 
     def test_fecha_y_huella_de_una_etiqueta(self):
         d = fuentes.detalle_oci(REG, "equipo/forja", "15.0.11-rootless", registro([]))
-        self.assertEqual(d, {"publicada": "2027-01-05T10:00:00Z", "digests": sorted([H, H3])})
+        self.assertEqual(d, {"publicada": "2027-01-05T10:00:00Z", "indice": H, "digests": sorted([H, H3])})
 
     def test_un_registro_que_pide_credencial_por_http_llano_no_se_sigue(self):
         red = Red({f"https://{REG}/v2/equipo/forja/tags/list": (401, {"www-authenticate": 'Bearer realm="http://otro.test/t"'}, b"")})

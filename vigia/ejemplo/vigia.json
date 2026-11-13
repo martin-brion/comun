@@ -1,21 +1,106 @@
 {
   "servidores": [
-    {"nombre": "principal", "lector": "local"},
-    {"nombre": "hoja-1", "lector": ["ssh", "-o", "BatchMode=yes", "hoja-1", "python3", "-"]}
+    {
+      "nombre": "principal",
+      "lector": "local"
+    },
+    {
+      "nombre": "hoja-1",
+      "lector": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "hoja-1",
+        "python3",
+        "-"
+      ]
+    }
   ],
-  "propias": ["propio/"],
-  "por_defecto": {"nivel": "nunca", "expuesto": false},
+  "propias": [
+    "propio/"
+  ],
+  "por_defecto": {
+    "nivel": "nunca",
+    "expuesto": false
+  },
   "componentes": {
-    "docker.io/library/postgres": {"nivel": "patch"},
-    "docker.io/library/odoo": {"nivel": "nunca", "expuesto": true, "nota": "se ensaya en la copia de pruebas"},
-    "docker.io/ejemplo/tunel": {"nivel": "patch", "expuesto": true, "linea": 1},
-    "docker.io/propio/bot": {"base": "python:3.13-slim"}
+    "docker.io/library/postgres": {
+      "nivel": "patch"
+    },
+    "docker.io/library/odoo": {
+      "nivel": "nunca",
+      "expuesto": true,
+      "nota": "se ensaya en la copia de pruebas"
+    },
+    "docker.io/ejemplo/tunel": {
+      "nivel": "patch",
+      "expuesto": true,
+      "linea": 1,
+      "playbook": "imagen"
+    },
+    "docker.io/propio/bot": {
+      "base": "python:3.13-slim"
+    }
   },
   "maduracion_dias": 7,
-  "plazos_h": {"kev_expuesto": 24, "alta_expuesta": 72, "alta_interna": 168, "ordinario": 720},
-  "fuentes": {"docker_hub": true, "registros": ["registro.ejemplo.test"], "kev": true},
-  "escaner": {"comando": null, "tope_s": 2700},
+  "plazos_h": {
+    "kev_expuesto": 24,
+    "alta_expuesta": 72,
+    "alta_interna": 168,
+    "ordinario": 720
+  },
+  "fuentes": {
+    "docker_hub": true,
+    "registros": [
+      "registro.ejemplo.test"
+    ],
+    "kev": true
+  },
+  "escaner": {
+    "comando": null,
+    "tope_s": 2700
+  },
   "estado_dir": "/var/lib/vigia",
   "registro_dir": "/var/lib/vigia/registro",
-  "foto_vigencia_s": 900
+  "foto_vigencia_s": 900,
+  "ventana": {
+    "dias": [
+      1
+    ],
+    "desde": "02:00",
+    "hasta": "05:00"
+  },
+  "playbooks": [
+    "imagen"
+  ],
+  "acciones": {
+    "principal": {
+      "respaldo_vigente": [
+        "/usr/local/sbin/vigia-accion",
+        "respaldo-vigente"
+      ],
+      "aplicar_imagen": [
+        "/usr/local/sbin/vigia-accion",
+        "aplicar-imagen",
+        "{servicio}",
+        "{referencia}"
+      ],
+      "verificar": [
+        "/usr/local/sbin/vigia-accion",
+        "verificar",
+        "{servicio}"
+      ],
+      "volver_imagen": [
+        "/usr/local/sbin/vigia-accion",
+        "volver-imagen",
+        "{servicio}",
+        "{referencia}"
+      ]
+    }
+  },
+  "max_por_ventana": 3,
+  "espera_salud_s": 180,
+  "aviso": [
+    "/usr/local/sbin/vigia-aviso"
+  ]
 }

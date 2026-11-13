@@ -82,6 +82,7 @@ def docker_hub(repo, pedir=pedir):
                 continue
             huellas = {t.get("digest")} | {i.get("digest") for i in t.get("images") or [] if isinstance(i, dict)}
             etiquetas.append({"nombre": t["name"], "publicada": str(t.get("last_updated") or "")[:20] or None,
+                              "indice": t["digest"] if _DIGEST.match(str(t.get("digest"))) else None,
                               "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.match(h))})
         return {"estado": "ok", "motivo": "", "etiquetas": etiquetas, "hay_mas": bool(datos.get("next"))}
     except FuenteError as e:
@@ -101,6 +102,7 @@ def etiqueta_hub(repo, tag, pedir=pedir):
         t = _json(cuerpo)
         huellas = {t.get("digest")} | {i.get("digest") for i in t.get("images") or [] if isinstance(i, dict)}
         return {"publicada": str(t.get("last_updated") or "")[:20] or None,
+                "indice": t["digest"] if _DIGEST.match(str(t.get("digest"))) else None,
                 "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.match(h))}
     except (FuenteError, TypeError, AttributeError):
         return None
@@ -144,7 +146,7 @@ def registro_oci(registro, repo, pedir=pedir):
             m = re.search(r'<([^>]+)>;\s*rel="next"', cab.get("link", ""))
             url = urllib.parse.urljoin(f"https://{registro}/", m.group(1)) if m else None
         return {"estado": "ok", "motivo": "", "hay_mas": bool(url),
-                "etiquetas": [{"nombre": n, "publicada": None, "digests": []} for n in nombres]}
+                "etiquetas": [{"nombre": n, "publicada": None, "indice": None, "digests": []} for n in nombres]}
     except FuenteError as e:
         return _desconocido(str(e))
     except (TypeError, AttributeError):
@@ -160,7 +162,8 @@ def detalle_oci(registro, repo, tag, pedir=pedir):
         estado, cab, cuerpo, auth = _con_token(f"{base}/manifests/{tag}", repo, pedir, {"Accept": _MANIFIESTOS})
         if estado != 200:
             return None
-        huellas = {cab.get("docker-content-digest")}
+        indice = cab.get("docker-content-digest")
+        huellas = {indice}
         manifiesto = _json(cuerpo)
         if manifiesto.get("manifests"):
             elegido = next((m for m in manifiesto["manifests"]
@@ -181,6 +184,7 @@ def detalle_oci(registro, repo, tag, pedir=pedir):
             return None
         creada = _json(cuerpo).get("created")
         return {"publicada": creada[:20] if isinstance(creada, str) else None,
+                "indice": indice if isinstance(indice, str) and _DIGEST.match(indice) else None,
                 "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.match(h))}
     except (FuenteError, TypeError, AttributeError):
         return None
