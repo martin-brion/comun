@@ -176,6 +176,21 @@ def completar(lote_id, c, resultado):
     guardar(recibo_path(lote_id, c), r)
 
 
+def anular(lote_id, c):
+    """La carga de ese lote y destino se anuló entera: el recibo queda aparte, como constancia, y deja de contar (el lote
+    se puede preparar de nuevo). Los estados auxiliares de esa corrida (intenciones, propuesta de rendición) se borran."""
+    p = recibo_path(lote_id, c)
+    r = leer(p)
+    if r is None:
+        raise EstadoError("Falta el recibo de la corrida confirmada")
+    r.update(estado="anulado", anulado=int(time.time()))
+    constancia = seguro(p.with_name(p.name.replace(".recibo.json", f".anulado.{r['anulado']}.json")))
+    guardar(constancia, r)
+    for hermano in sorted(p.parent.glob(p.name.replace(".recibo.json", ".*.json"))):
+        if hermano != constancia and ".anulado." not in hermano.name and hermano.is_file() and not hermano.is_symlink():
+            seguro(hermano).unlink()
+
+
 def retener(lote, ts, cfg):
     from . import configuracion
     from bot import odoo

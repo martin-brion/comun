@@ -542,3 +542,17 @@ padrón. Con el OK, las altas corren antes de abrir el recibo y antes de la prim
 nueva vuelve con un aviso (lo leído no se parece al padrón, falta un dato fiscal), no se carga ninguna factura y se puede
 preparar de nuevo: el proveedor ya existe y la propuesta muestra su razón social. Lo que resuelve el alta no cambia el
 archivo aprobado: el proveedor vive en el plan en memoria, y `estandar._payload` firma el comprobante sin él.
+
+0.1.0-dev.18. `gasto_anular {lote_id, empresa, destino}` deshace la carga completa de un lote. Lee el recibo cargado y
+borra solo sus efectos (informes, adjuntos, gastos o facturas), en ese orden, si cada uno sigue en borrador y fue creado y
+modificado por última vez con la misma identidad; los adjuntos tienen que colgar de esos registros. Si algo cambió, no
+borra nada. No anula una carga con rendición, con `seguimiento` configurado ni a medias. El recibo queda como
+`<erp>.anulado.<hora>.json`; el recibo, las intenciones y la propuesta se retiran, y el lote se puede preparar de nuevo.
+Es la única vía por la que el plugin llama `unlink`, y solo sobre esos cuatro modelos mientras anula. Es una tool de
+escritura con su tarjeta.
+
+En un motor con `Tool.deshacer` (0.6.31), `gasto_cargar` declara `gasto_anular` como su inversa, con `idempotente`: la
+carga retoma por identificadores verificables. Si la instancia lista `gasto_cargar` en `directo.json`, la carga va sin
+tarjeta y la persona recibe el texto público de siempre; la anulación de una carga reciente también. Una carga con alta
+de proveedor, o en un destino con `seguimiento`, sigue con tarjeta (`_previo_directo`). `gasto_rendir` no declara nada: es
+un reintegro. En un motor anterior el plugin carga igual, sin la declaración, y `gasto_anular` pide su tarjeta.

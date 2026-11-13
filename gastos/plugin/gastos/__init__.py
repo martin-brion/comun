@@ -255,7 +255,8 @@ async def _odoo(ctx, model, method, *args, **kw):
         c = _CORRIDA.get()
         if method not in _METODOS_LECTURA_PLUGIN and not (c and c.get("_aplicando") and (
                 (method == "create" and model in ("hr.expense", "hr.expense.sheet", "ir.attachment", "account.move"))
-                or _ajuste_de_impuesto(model, method, args))):
+                or _ajuste_de_impuesto(model, method, args))) and not (
+                c and c.get("_anulando") and method == "unlink" and model in _BORRABLES):
             raise GastoError("La corrida no permite esta escritura")
         if method not in _METODOS_LECTURA_PLUGIN:
             _vigencia(ctx, c)
@@ -342,6 +343,9 @@ _TOPE_TEXTO = {"rotulo": 120, "detalle": 200, "texto": 200}
 _PAGO_NOMBRE = {"company_account": "Empresa", "own_account": "Propio"}
 
 
+# Lo único que el plugin borra, y solo al anular una carga propia que nadie tocó (_anular): en este orden.
+_BORRABLES = ("hr.expense.sheet", "ir.attachment", "hr.expense", "account.move")
+_ESTADOS_BORRADOR = {"hr.expense.sheet": ("draft",), "hr.expense": ("draft", "reported"), "account.move": ("draft",)}
 _METODOS_LECTURA_PLUGIN = frozenset({"search_read", "read", "search", "search_count", "fields_get", "context_get", "check_access_rights"})
 
 
@@ -1177,6 +1181,84 @@ async def _operacion(ctx, args, cargar_corrido=False, aprobacion=None):
         raise GastoError(str(exc)) from None
 
 
+T_ANULAR_TOCADO = ("Alguno de esos borradores ya no está como lo dejé (lo cambió otra persona, se validó o se borró), así que "
+                   "no anulo nada. Corregilo en Odoo, o pedile a Administración que lo revise.")
+
+
+async def _intactos(ctx, c, uid, por_modelo):
+    """GastoError si algún efecto de la carga ya no es un borrador propio que nadie tocó: tiene que existir, seguir en
+    borrador y haber sido creado y modificado por última vez con esta misma identidad. Los adjuntos, además, tienen que
+    colgar de los registros de la misma carga."""
+    registros = set()
+    for modelo, estados in _ESTADOS_BORRADOR.items():
+        ids = por_modelo.get(modelo) or []
+        if not ids:
+            continue
+        filas = await _odoo(ctx, modelo, "search_read", [("id", "in", ids)], fields=["state", "create_uid", "write_uid"])
+        if (len(filas) != len(set(ids)) or {f["id"] for f in filas} != set(ids)
+                or any(f.get("state") not in estados or _rel(f.get("create_uid")) != uid or _rel(f.get("write_uid")) != uid
+                       for f in filas)):
+            raise GastoError(T_ANULAR_TOCADO)
+        registros |= {(modelo, i) for i in ids}
+    ids = por_modelo.get("ir.attachment") or []
+    if ids:
+        filas = await _odoo(ctx, "ir.attachment", "search_read", [("id", "in", ids)],
+                            fields=["res_model", "res_id", "create_uid"])
+        if (len(filas) != len(set(ids)) or {f["id"] for f in filas} != set(ids)
+                or any((f.get("res_model"), f.get("res_id")) not in registros or _rel(f.get("create_uid")) != uid
+                       for f in filas)):
+            raise GastoError(T_ANULAR_TOCADO)
+
+
+async def _anular(ctx, args):
+    """Deshace la carga completa de un lote: borra los borradores que creó (los del recibo, nada más) si siguen intactos, y
+    deja el lote listo para prepararse de nuevo. Si algo cambió, no borra nada. Una carga con rendición, con seguimiento
+    posterior o a medias no se anula desde acá."""
+    try:
+        with _contexto(ctx, args) as c:
+            await _puerta(ctx)
+            lote_id = args.get("lote_id", "")
+            estado.raiz(lote_id)
+            locks = _LOCKS.setdefault(asyncio.get_running_loop(), {})
+            async with locks.setdefault(lote_id, asyncio.Lock()), custodia.exclusion(lote_id, c):
+                plan = _leer(lote_id)
+                if plan["login"] != ctx.user.login:
+                    raise GastoError("La carga pertenece a otra persona")
+                _validar_seleccion(plan, c)
+                recibo = estado.recibo(lote_id, c)
+                if not recibo or recibo.get("estado") != "cargado" or recibo.get("login") != ctx.user.login:
+                    raise GastoError(f"El lote {lote_id} no tiene una carga completa para anular.")
+                if "rendicion" in c and estado.leer(facturas.ruta(lote_id, c, "recibo")):
+                    raise GastoError("Ese lote ya tiene una rendición: su carga no se anula desde acá.")
+                if c.get("seguimiento"):
+                    raise GastoError("La carga de este destino tiene pasos posteriores: no se anula desde acá.")
+                por_modelo = {}
+                for e in recibo.get("efectos") or []:
+                    por_modelo.setdefault(e.get("modelo"), []).append(e.get("id"))
+                if not por_modelo or set(por_modelo) - set(_BORRABLES) or not all(
+                        type(i) is int and i > 0 for ids in por_modelo.values() for i in ids):
+                    raise GastoError(f"El recibo del lote {lote_id} no permite anular la carga.")
+                uid, _ = await _identidad(ctx, c)
+                if uid != plan["odoo_uid"]:
+                    raise GastoError("Cambió la identidad Odoo desde la carga.")
+                await _intactos(ctx, c, uid, por_modelo)
+                c["_anulando"] = True
+                borrados = 0
+                for modelo in _BORRABLES:
+                    ids = por_modelo.get(modelo)
+                    if ids:
+                        _vigencia(ctx, c)
+                        await _odoo(ctx, modelo, "unlink", ids)
+                        borrados += len(ids)
+                estado.anular(lote_id, c)
+                _plan_path(lote_id).unlink(missing_ok=True)
+                documentos = sum(len(por_modelo.get(m) or []) for m in ("hr.expense", "account.move"))
+                return {"estado": "anulado", "lote_id": lote_id, "empresa": c["empresa"], "destino": c["destino"],
+                        "borrados": borrados, "documentos": documentos}
+    except (configuracion.ConfigError, estado.EstadoError) as exc:
+        raise GastoError(str(exc)) from None
+
+
 _MAX_LINEAS_CARGA = 12
 _MAX_PUBLICO = 1500
 _MOTIVO_TECNICO = "No pude completar la operación por un error técnico. Revisemos el pedido antes de repetirlo."
@@ -1509,6 +1591,56 @@ async def _tool_cargar(ctx, args):
         return _rechazo(exc)
 
 
+async def _tool_anular(ctx, args):
+    from bot.broker import _ok
+    try:
+        r = await _anular(ctx, args)
+        texto = (f"Anulé la carga del lote {r['lote_id']}: borré de Odoo {r['documentos']} "
+                 f"{'borrador' if r['documentos'] == 1 else 'borradores'} con sus fotos. Las fotos del lote siguen acá: "
+                 "si hay que cargarlo corregido, se prepara de nuevo.")
+        return _publico(_ok(texto), texto)
+    except (GastoError, OSError) as exc:
+        return _rechazo(exc)
+
+
+async def _resumen_anular(ctx, args, tecnico):
+    with _contexto(ctx, args) as c:
+        lote_id = args.get("lote_id", "")
+        estado.raiz(lote_id)
+        recibo = estado.recibo(lote_id, c) or {}
+        n = sum(1 for e in recibo.get("efectos") or [] if e.get("modelo") in ("hr.expense", "account.move"))
+        return "Anular una carga de gastos", (
+            f"Empresa: {c['compania']} ({c['empresa']})\nDestino: {c['destino']}\n"
+            f"Borro de Odoo los {n} borradores que creó la carga del lote {lote_id}, con sus fotos adjuntas, solo si nadie "
+            "los cambió ni los validó. Las fotos del lote quedan: se puede preparar de nuevo.")
+
+
+async def _previo_directo(ctx, args):
+    """Motor 0.6.31, «guardar sin preguntar»: la carga puede ir sin tarjeta solo si después se puede anular entera. Un
+    alta de proveedor o un destino con pasos posteriores no tienen vuelta atrás desde acá: None manda a la tarjeta."""
+    try:
+        with _contexto(ctx, args) as c:
+            plan = _leer(args.get("lote_id", ""))
+            if plan["login"] != ctx.user.login or c.get("seguimiento"):
+                return None
+            if any((x.get("fiscal") or {}).get("alta_proveedor") for x in plan["comprobantes"]):
+                return None
+            return {"lote_id": args.get("lote_id", "")}
+    except Exception:                                   # noqa: BLE001 - ante cualquier duda, con tarjeta
+        return None
+
+
+def _deshacer_de_la_carga():
+    """El argumento `deshacer` de gasto_cargar, solo en un motor que lo conoce (0.6.31): el mismo plugin carga en los
+    anteriores. La carga retoma por identificadores verificables, así que un reintento con la misma propuesta no duplica."""
+    Deshacer = getattr(plugins, "Deshacer", None)
+    if Deshacer is None or "deshacer" not in plugins.Tool.__dataclass_fields__:
+        return {}
+    return {"deshacer": Deshacer(
+        tool="gasto_anular", previo=_previo_directo, idempotente=True,
+        args=lambda llamada: {k: llamada["args"][k] for k in ("lote_id", "empresa", "destino") if k in llamada["args"]})}
+
+
 async def _huella_cargar(ctx, args):
     with _contexto(ctx, args) as c:
         plan = _leer(args["lote_id"])
@@ -1681,7 +1813,16 @@ PLUGIN = plugins.Plugin(
             'factura con su link: pasásela a la persona tal cual. Si queda seguimiento pendiente, usá gasto_estado '
             'y completá los pasos que indique, con sus propias confirmaciones.',
             {'lote_id': str, 'empresa': str, 'destino': str}, _tool_cargar, escribe=True, con_huella=True, huella=_huella_cargar,
-            resumen=_resumen_cargar, oculta_input=True),
+            resumen=_resumen_cargar, oculta_input=True, **_deshacer_de_la_carga()),
+        plugins.Tool(
+            "gasto_anular",
+            'Anula la carga COMPLETA de un lote ya cargado con gasto_cargar: borra de Odoo los borradores que creó esa carga '
+            '(facturas o gastos e informes, con sus fotos), solo si siguen en borrador y nadie los cambió; si algo cambió, no '
+            'borra nada y lo dice. Usala cuando la persona corrige o anula lo recién cargado: después, si corresponde, '
+            'prepará el lote de nuevo con el dato corregido (gasto_preparar) y cargalo. Los mismos lote_id, empresa y '
+            'destino de la carga. No anula una rendición, ni una carga con pasos posteriores, ni un lote a medias.',
+            {'lote_id': str, 'empresa': str, 'destino': str}, _tool_anular, escribe=True, resumen=_resumen_anular,
+            oculta_input=True),
         plugins.Tool("gasto_rendicion_preparar", "Prepara por separado la rendición opcional sobre facturas ya registradas y contabilizadas. "
             "Sólo lee ERP y evalúa la política del empleado; un rechazo no cancela ni impide registrar facturas.",
             {"lote_id":str,"empresa":str,"destino":str},_tool_rendicion_preparar,oculta_input=True),
