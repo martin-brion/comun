@@ -13,3 +13,4 @@ El motor no vive acá.
 - **Git:** `add` con rutas explícitas. Nunca `--force` ni `--no-verify`. Los bytes no se tocan: `.gitattributes` lo fija.
 - **Cada carpeta manda:** antes de tocar un componente, leé su `AGENTS.md`, si lo tiene.
 - Este repo no recibe copias de reglas de otras casas: lo que entra acá viaja.
+- Las ideas que no se construyen ahora van a `backlog_mejoras.md` (raíz del repo), con problema, propuesta y plan; no se pierden en el chat ni en la memoria del agente.
