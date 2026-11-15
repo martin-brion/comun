@@ -1,0 +1,492 @@
+{
+ "titulo": "Orden de la casa de ejemplo",
+ "antetitulo": "Ejemplo inventado · 3 de marzo",
+ "bajada": "Cómo está organizada una casa inventada y qué conviene ordenar. Sirve para ver todos los bloques.",
+ "fuentes": "Fuentes: dos documentos inventados de `ejemplo/fuentes`. Ningún dato es real.",
+ "secciones": [
+  {
+   "id": "resumen",
+   "titulo": "La casa está bien, con dos bordes flojos",
+   "menu": "Resumen",
+   "bloques": [
+    {
+     "tipo": "veredicto",
+     "columnas": [
+      {
+       "titulo": "Lo que está bien",
+       "items": [
+        "Hay **una sola** regla de altas.",
+        "Cada cliente tiene su carpeta."
+       ]
+      },
+      {
+       "titulo": "Dónde está el desorden",
+       "items": [
+        "Un cliente vive fuera de su carpeta.",
+        "El respaldo no se prueba desde octubre."
+       ]
+      }
+     ]
+    },
+    {
+     "tipo": "cifras",
+     "items": [
+      {
+       "valor": "2",
+       "texto": "clientes"
+      },
+      {
+       "valor": "1",
+       "texto": "fuera de su carpeta"
+      },
+      {
+       "valor": "5",
+       "texto": "meses sin probar el respaldo"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "mapa",
+   "titulo": "Cómo entra un cliente",
+   "menu": "Mapa",
+   "intro": "El pedido pasa por una revisión antes de tener ficha.",
+   "bloques": [
+    {
+     "tipo": "diagrama",
+     "pie": "Diagrama chico: entra entero en el recuadro.",
+     "mermaid": "flowchart LR\n  pedido[Pedido de alta] -->|lo revisa otra persona| revision[Revisión]\n  revision -->|aprobado| ficha[Ficha del cliente]"
+    },
+    {
+     "tipo": "mapa",
+     "titulo": "La casa de ejemplo · dos clientes",
+     "vistas": [
+      {
+       "id": "norte",
+       "nombre": "Ejemplo Norte"
+      },
+      {
+       "id": "sur",
+       "nombre": "Ejemplo Sur"
+      }
+     ],
+     "columnas": [
+      {
+       "titulo": "Carpetas",
+       "fondo": true,
+       "items": [
+        {
+         "id": "clientes",
+         "fila": 1,
+         "filas": 2,
+         "titulo": "clientes/",
+         "texto": "donde manda la regla",
+         "dentro": [
+          {
+           "titulo": "norte",
+           "vistas": [
+            "norte"
+           ]
+          }
+         ]
+        },
+        {
+         "id": "varios",
+         "fila": 3,
+         "titulo": "varios/",
+         "estado": "aviso",
+         "vistas": [
+          "sur"
+         ],
+         "dentro": [
+          {
+           "titulo": "sur",
+           "estado": "aviso"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "titulo": "Quién atiende",
+       "items": [
+        {
+         "id": "equipo",
+         "fila": 1,
+         "titulo": "Equipo de altas",
+         "estado": "acento",
+         "texto": "atiende a los dos clientes"
+        },
+        {
+         "nota": "Lo que no está en la regla se revisa a mano.",
+         "fila": 2,
+         "vistas": [
+          "sur"
+         ]
+        },
+        {
+         "id": "revision",
+         "fila": 3,
+         "titulo": "Revisión a mano",
+         "estado": "apagado",
+         "vistas": [
+          "sur"
+         ]
+        }
+       ]
+      },
+      {
+       "titulo": "Fichas",
+       "items": [
+        {
+         "id": "ficha-norte",
+         "fila": 1,
+         "titulo": "fichas/norte.md",
+         "vistas": [
+          "norte"
+         ]
+        },
+        {
+         "id": "ficha-sur",
+         "fila": 3,
+         "titulo": "fichas/sur.md",
+         "texto": "en preparación",
+         "estado": "apagado",
+         "vistas": [
+          "sur"
+         ]
+        }
+       ]
+      }
+     ],
+     "flechas": [
+      {
+       "de": "equipo",
+       "a": "clientes",
+       "texto": "lee"
+      },
+      {
+       "de": "equipo",
+       "a": "ficha-norte",
+       "texto": "escribe"
+      },
+      {
+       "de": "revision",
+       "a": "varios",
+       "texto": "busca acá"
+      },
+      {
+       "de": "revision",
+       "a": "ficha-sur"
+      },
+      {
+       "de": "equipo",
+       "a": "revision",
+       "texto": "deriva",
+       "vistas": [
+        "sur"
+       ]
+      }
+     ],
+     "pie": "Elegí un cliente para ver solo lo suyo. En ámbar, lo que no sigue la regla."
+    },
+    {
+     "tipo": "desplegable",
+     "titulo": "Ver todas las tareas de la casa (diagrama grande)",
+     "bloques": [
+      {
+       "tipo": "diagrama",
+       "mermaid": "flowchart TD\n  casa[La casa]\n  casa --> a0[Ventas]\n  a0 --> a0t0[Alta de<br/>ventas]\n  a0 --> a0t1[Consulta de<br/>ventas]\n  a0 --> a0t2[Cambio de<br/>ventas]\n  a0 --> a0t3[Baja de<br/>ventas]\n  a0 --> a0t4[Control de<br/>ventas]\n  a0 --> a0t5[Informe de<br/>ventas]\n  casa --> a1[Compras]\n  a1 --> a1t0[Alta de<br/>compras]\n  a1 --> a1t1[Consulta de<br/>compras]\n  a1 --> a1t2[Cambio de<br/>compras]\n  a1 --> a1t3[Baja de<br/>compras]\n  a1 --> a1t4[Control de<br/>compras]\n  a1 --> a1t5[Informe de<br/>compras]\n  casa --> a2[Depósito]\n  a2 --> a2t0[Alta de<br/>depósito]\n  a2 --> a2t1[Consulta de<br/>depósito]\n  a2 --> a2t2[Cambio de<br/>depósito]\n  a2 --> a2t3[Baja de<br/>depósito]\n  a2 --> a2t4[Control de<br/>depósito]\n  a2 --> a2t5[Informe de<br/>depósito]\n  casa --> a3[Entregas]\n  a3 --> a3t0[Alta de<br/>entregas]\n  a3 --> a3t1[Consulta de<br/>entregas]\n  a3 --> a3t2[Cambio de<br/>entregas]\n  a3 --> a3t3[Baja de<br/>entregas]\n  a3 --> a3t4[Control de<br/>entregas]\n  a3 --> a3t5[Informe de<br/>entregas]\n  casa --> a4[Cobranzas]\n  a4 --> a4t0[Alta de<br/>cobranzas]\n  a4 --> a4t1[Consulta de<br/>cobranzas]\n  a4 --> a4t2[Cambio de<br/>cobranzas]\n  a4 --> a4t3[Baja de<br/>cobranzas]\n  a4 --> a4t4[Control de<br/>cobranzas]\n  a4 --> a4t5[Informe de<br/>cobranzas]\n  casa --> a5[Personal]\n  a5 --> a5t0[Alta de<br/>personal]\n  a5 --> a5t1[Consulta de<br/>personal]\n  a5 --> a5t2[Cambio de<br/>personal]\n  a5 --> a5t3[Baja de<br/>personal]\n  a5 --> a5t4[Control de<br/>personal]\n  a5 --> a5t5[Informe de<br/>personal]",
+       "pie": "Más de cuarenta cajas, dentro de un desplegable cerrado: se dibuja al abrirlo."
+      }
+     ]
+    },
+    {
+     "tipo": "mapa",
+     "fuera_de_vista": "ocultar",
+     "vistas": [
+      {
+       "id": "hoy",
+       "nombre": "Hoy"
+      },
+      {
+       "id": "propuesto",
+       "nombre": "Propuesto"
+      }
+     ],
+     "columnas": [
+      {
+       "titulo": "Carpetas",
+       "items": [
+        {
+         "id": "p-clientes",
+         "fila": 1,
+         "titulo": "clientes/",
+         "dentro": [
+          {
+           "titulo": "norte"
+          },
+          {
+           "titulo": "sur",
+           "estado": "acento",
+           "vistas": [
+            "propuesto"
+           ]
+          }
+         ]
+        },
+        {
+         "id": "p-varios",
+         "fila": 2,
+         "titulo": "varios/",
+         "estado": "aviso",
+         "vistas": [
+          "hoy"
+         ],
+         "dentro": [
+          {
+           "titulo": "sur",
+           "estado": "aviso"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "titulo": "Quién atiende",
+       "items": [
+        {
+         "id": "p-equipo",
+         "fila": 1,
+         "titulo": "Equipo de altas",
+         "estado": "acento"
+        },
+        {
+         "id": "p-revision",
+         "fila": 2,
+         "titulo": "Revisión a mano",
+         "vistas": [
+          "hoy"
+         ]
+        }
+       ]
+      }
+     ],
+     "flechas": [
+      {
+       "de": "p-equipo",
+       "a": "p-clientes",
+       "texto": "lee"
+      },
+      {
+       "de": "p-revision",
+       "a": "p-varios"
+      }
+     ],
+     "pie": "«Hoy» y «Propuesto» sobre el mismo dibujo: lo que no es de la vista elegida desaparece."
+    }
+   ]
+  },
+  {
+   "id": "clientes",
+   "titulo": "Dos clientes, dos formas",
+   "menu": "Clientes",
+   "bloques": [
+    {
+     "tipo": "matriz",
+     "columnas": [
+      {
+       "id": "norte",
+       "nombre": "Ejemplo Norte",
+       "nota": "Dado de alta en enero."
+      },
+      {
+       "id": "sur",
+       "nombre": "Ejemplo Sur"
+      }
+     ],
+     "filas": [
+      {
+       "pieza": "Carpeta",
+       "regla": "`clientes/<nombre>`",
+       "celdas": {
+        "norte": [
+         "ok",
+         "`clientes/norte`"
+        ],
+        "sur": [
+         "dif",
+         "`varios/sur`"
+        ]
+       }
+      },
+      {
+       "pieza": "Ficha",
+       "regla": "`fichas/<nombre>.md`",
+       "celdas": {
+        "norte": [
+         "ok",
+         "tiene ficha"
+        ],
+        "sur": [
+         "exc",
+         "en preparación"
+        ]
+       }
+      },
+      {
+       "pieza": "Base",
+       "regla": "una por cliente",
+       "celdas": {
+        "norte": [
+         "ok",
+         "propia"
+        ],
+        "sur": [
+         "na",
+         "todavía no la usa"
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "hallazgos",
+   "titulo": "Hallazgos",
+   "bloques": [
+    {
+     "tipo": "hallazgos",
+     "items": [
+      {
+       "severidad": "alta",
+       "tema": "Respaldo",
+       "titulo": "El respaldo no se prueba desde octubre",
+       "texto": "La regla pide una restauración por mes. La última fue hace cinco meses.",
+       "evidencia": [
+        {
+         "parafrasis": "La regla dice que una copia sin restaurar no vale como respaldo.",
+         "cita": "Una copia que nunca se restauró no cuenta como respaldo.",
+         "archivo": "casa:reglas.md"
+        },
+        {
+         "parafrasis": "El estado reconoce que la última prueba fue en octubre.",
+         "cita": "La última restauración de prueba fue en octubre.",
+         "archivo": "casa:estado.md"
+        }
+       ]
+      },
+      {
+       "severidad": "media",
+       "tema": "Carpetas",
+       "titulo": "Un cliente vive fuera de su carpeta",
+       "texto": "La regla manda `clientes/<nombre>`. Uno de los dos está en otro lado.",
+       "evidencia": [
+        {
+         "parafrasis": "El propio estado dice dónde está guardado.",
+         "cita": "está guardado en varios/sur, fuera de su carpeta",
+         "archivo": "casa:estado.md"
+        },
+        {
+         "parafrasis": "El equipo ya anotó que hay que mudarlo.",
+         "cita": "mudar «Ejemplo Sur» cuando haya una ventana tranquila",
+         "archivo": "casa:estado.md"
+        },
+        {
+         "parafrasis": "La tabla de la regla fija el lugar.",
+         "cita": "| Carpeta | clientes/<nombre> |",
+         "archivo": "casa:reglas.md"
+        },
+        {
+         "parafrasis": "Se contaron las carpetas a mano.",
+         "fuente": "conteo del 3 de marzo, sin documento"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "propuesta",
+   "titulo": "Propuesta",
+   "bloques": [
+    {
+     "tipo": "tarjetas",
+     "items": [
+      {
+       "titulo": "1 · Mudar al cliente",
+       "texto": "Pasa a `clientes/sur`."
+      },
+      {
+       "titulo": "2 · Probar el respaldo",
+       "texto": "Una restauración este mes."
+      }
+     ]
+    },
+    {
+     "tipo": "subtitulo",
+     "texto": "La forma única"
+    },
+    {
+     "tipo": "codigo",
+     "texto": "carpeta   clientes/<nombre>\nficha     fichas/<nombre>.md"
+    },
+    {
+     "tipo": "pasos",
+     "items": [
+      "Copiar la carpeta.",
+      "Revisar que abra.",
+      "Borrar la vieja."
+     ]
+    },
+    {
+     "tipo": "nota",
+     "texto": "Nada de esto es real: es el ejemplo del componente."
+    }
+   ]
+  },
+  {
+   "id": "plan",
+   "titulo": "Plan y decisiones",
+   "menu": "Plan",
+   "bloques": [
+    {
+     "tipo": "fases",
+     "items": [
+      {
+       "titulo": "0 · Sin riesgo",
+       "cuando": "Esta semana",
+       "items": [
+        "Mudar la carpeta."
+       ]
+      },
+      {
+       "titulo": "1 · Respaldo",
+       "cuando": "Este mes",
+       "texto": "Restaurar una copia."
+      }
+     ]
+    },
+    {
+     "tipo": "decisiones",
+     "items": [
+      {
+       "id": "D1",
+       "decision": "Cuándo se muda el cliente.",
+       "recomendacion": "Esta semana."
+      }
+     ]
+    },
+    {
+     "tipo": "texto",
+     "parrafos": [
+      "Fin del ejemplo."
+     ]
+    }
+   ]
+  }
+ ]
+}
