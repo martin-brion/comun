@@ -23,6 +23,7 @@ _MARCA = re.compile(r"^m[0-9]{9,12}$")
 _PATRON = {"servicio": _SERVICIO, "referencia": _FIJA, "marca": _MARCA, "base": _FIJA}
 _BASE = "org.opencontainers.image.base.digest"
 MAX_FALLAS = 2
+TOPE_ARMADO = 3600                 # armar una imagen entera puede llevar más que los 15 minutos de las demás acciones
 PASO_S = 10
 
 
@@ -158,7 +159,8 @@ def _aplicar_servicio(cfg, db, servidor, c, servicio, playbook, tomar, correr, r
         n = estado.intencion(db, c["id"], nombre, "construir",
                              {"servicio": servicio, "de": c["anterior"], "a": c["referencia"], "tipo": playbook},
                              int(reloj()))
-        armada = accion(cfg, nombre, "construir_propia", {"servicio": servicio, "base": c["referencia"]}, correr) is True
+        armada = accion(cfg, nombre, "construir_propia", {"servicio": servicio, "base": c["referencia"]}, correr,
+                        TOPE_ARMADO) is True
         estado.resultado(db, n, "hecho" if armada else "fallo",
                          "" if armada else "no se pudo armar o no pasó su prueba aislada; no se tocó lo que corre",
                          int(reloj()))

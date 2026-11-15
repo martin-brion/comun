@@ -130,8 +130,8 @@ sistema responde: cambiar de servicio de respaldo es cambiar los comandos de `ac
 | `volver_propia` | `{servicio}`, `{base}` | Deja el servicio corriendo con la imagen armada sobre esa base anterior, la que conservó. |
 
 `{servicio}` es el nombre del servicio de compose (`^[a-z0-9][a-z0-9_.-]{0,62}$`); `{referencia}` y `{base}`, una imagen
-con huella; `{marca}`, un identificador que pone el vigía (`^m[0-9]{9,12}$`). Una acción tiene 15 minutos; pasado ese tiempo cuenta
-como falla.
+con huella; `{marca}`, un identificador que pone el vigía (`^m[0-9]{9,12}$`). Una acción tiene 15 minutos, y `construir_propia` una
+hora; pasado ese tiempo cuenta como falla.
 
 Con `datos`, lo que el servicio haya escrito entre la copia y la restauración se pierde: por eso la copia se toma con el
 servicio detenido y justo antes. Retirar copias viejas es de la instancia, y nunca la de un intento que quedó a medias.
