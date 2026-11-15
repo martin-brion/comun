@@ -46,8 +46,8 @@ class Documentos:
         raiz, _, relativa = clave.partition(":")
         if raiz not in self.raices:
             raise ErrorDatos('%s: la raíz "%s" no fue declarada con --raiz' % (donde, raiz))
-        partes = Path(relativa.replace("\\", "/")).parts
-        if not partes or Path(relativa).is_absolute() or any(p in ("..", "") or ":" in p for p in partes):
+        partes = relativa.replace("\\", "/").split("/")
+        if any(p in ("", ".", "..") or ":" in p for p in partes):
             raise ErrorDatos("%s: la ruta tiene que ser relativa a su raíz y no puede salir de ella" % donde)
         base = self.raices[raiz]
         ruta = base.joinpath(*partes)
@@ -298,14 +298,36 @@ def componer(d, raices, mermaid=None):
         rangos = [(c["a"], c["b"], c["ancla"]) for c in doc["citas"]]
         pasajes = "".join('<li><a href="#%s">%s</a><span class="suave"> · hallazgo %s</span></li>'
                           % (c["ancla"], en_linea(c["parafrasis"]), _e(c["hallazgo"])) for c in doc["citas"])
+        convertido = a_html(doc["texto"], rangos)
+        for c in doc["citas"]:
+            if 'id="%s"' % c["ancla"] not in convertido:
+                raise ErrorDatos("la cita del hallazgo %s cae en un tramo de %s que no se muestra (un comentario)"
+                                 % (c["hallazgo"], doc["clave"]))
         cuerpo = ('<div class="hoja documento-hoja"><header class="portada"><a class="volver" href="../index.html">'
                   '← Volver al informe</a><span class="antetitulo">Documento fuente · %s</span><h1>%s</h1></header>'
                   '<aside class="pasajes"><h2>Pasajes señalados</h2><ol>%s</ol></aside>'
                   '<article class="documento">%s</article></div>'
-                  % (_e(doc["raiz"]), _e(doc["ruta"]), pasajes, a_html(doc["texto"], rangos)))
+                  % (_e(doc["raiz"]), _e(doc["ruta"]), pasajes, convertido))
         archivos[doc["pagina"]] = _pagina("%s · %s" % (doc["ruta"], d["titulo"]), cuerpo, "../", recursos, tema,
                                           origen).encode("utf-8")
     return archivos
+
+
+def _es_enlace(ruta):
+    return ruta.is_symlink() or (hasattr(ruta, "is_junction") and ruta.is_junction())
+
+
+def _destino(salida, relativo):
+    """La ruta de un archivo del sitio, comprobando que ningún tramo sea un enlace que saque de la salida."""
+    if not isinstance(relativo, str) or not re.match(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$", relativo) \
+            or ".." in relativo.split("/"):
+        raise ErrorDatos("ruta inválida dentro de la salida: %r" % (relativo,))
+    tramo = salida
+    for parte in relativo.split("/"):
+        tramo = tramo / parte
+        if _es_enlace(tramo):
+            raise ErrorDatos("la salida tiene un enlace en %s: no se escribe ni se borra a través de un enlace" % tramo)
+    return tramo
 
 
 def armar(d, raices, salida, mermaid=None):
@@ -313,22 +335,30 @@ def armar(d, raices, salida, mermaid=None):
     archivos = componer(d, raices, mermaid)
     salida = Path(salida)
     previos = []
+    if _es_enlace(salida):
+        raise ErrorDatos("la salida no puede ser un enlace: %s" % salida)
     if salida.exists():
         if not salida.is_dir():
             raise ErrorDatos("la salida no es una carpeta: %s" % salida)
         manifiesto = salida / MANIFIESTO
+        if _es_enlace(manifiesto):
+            raise ErrorDatos("el registro del armado anterior es un enlace: %s" % manifiesto)
         if manifiesto.is_file():
-            previos = json.loads(manifiesto.read_text(encoding="utf-8")).get("archivos", [])
+            try:
+                previos = json.loads(manifiesto.read_text(encoding="utf-8"))["archivos"]
+            except (ValueError, KeyError, TypeError):
+                raise ErrorDatos("el registro del armado anterior está dañado: %s" % manifiesto) from None
+            if not isinstance(previos, list):
+                raise ErrorDatos("el registro del armado anterior está dañado: %s" % manifiesto)
         elif any(salida.iterdir()):
             raise ErrorDatos("la carpeta de salida no está vacía y no es de un informe: %s" % salida)
-    for relativo in previos:
-        partes = Path(relativo).parts
-        if isinstance(relativo, str) and partes and ".." not in partes and not Path(relativo).is_absolute():
-            viejo = salida.joinpath(*partes)
-            if viejo.is_file() and not viejo.is_symlink():
-                viejo.unlink()
-    for relativo, contenido in sorted(archivos.items()):
-        destino = salida.joinpath(*relativo.split("/"))
+    # Todo se comprueba antes de tocar el disco: ni un borrado ni una escritura a medias.
+    borrar = [_destino(salida, relativo) for relativo in previos]
+    escribir = [(_destino(salida, relativo), contenido) for relativo, contenido in sorted(archivos.items())]
+    for viejo in borrar:
+        if viejo.is_file():
+            viejo.unlink()
+    for destino, contenido in escribir:
         destino.parent.mkdir(parents=True, exist_ok=True)
         destino.write_bytes(contenido)
     (salida / MANIFIESTO).write_text(

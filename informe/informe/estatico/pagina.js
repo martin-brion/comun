@@ -16,7 +16,12 @@
   function abrirDestino() {
     var destino = location.hash.length > 1 ? document.getElementById(location.hash.slice(1)) : null;
     for (var n = destino; n; n = n.parentElement) { if (n.tagName === 'DETAILS') n.open = true; }
-    if (destino) destino.scrollIntoView({ block: 'center' });
+    document.querySelectorAll('.destino').forEach(function (v) { v.classList.remove('destino'); });
+    if (!destino) return;
+    /* Un ancla vacía marca una segunda cita del mismo bloque: lo que se señala es el bloque. */
+    var bloque = destino.classList.contains('ancla') ? (destino.closest('.resaltado') || destino.nextElementSibling || destino) : destino;
+    bloque.classList.add('destino');
+    bloque.scrollIntoView({ block: 'center' });
   }
   window.addEventListener('hashchange', abrirDestino);
   abrirDestino();

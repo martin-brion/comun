@@ -7,10 +7,10 @@ import html
 import re
 
 _CERCA = re.compile(r"^(\s*)(```+|~~~+)\s*([\w-]*)\s*$")
-_TITULO = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+_TITULO = re.compile(r"^(#{1,6})[ \t]+(\S.*)$")
 _REGLA = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
 _ITEM = re.compile(r"^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$")
-_SEPARADOR = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
+_SEPARADOR = re.compile(r"^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$")
 
 _CODIGO = re.compile(r"(`+)(.+?)\1")
 _ENLACE = re.compile(r"\[([^\]\n]+)\]\(([^)\s]+)\)")
@@ -18,6 +18,7 @@ _NEGRITA = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
 _CURSIVA = re.compile(r"(?<![*\w])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![*\w])")
 _TACHADO = re.compile(r"~~(?=\S)(.+?)(?<=\S)~~")
 _GUARDADO = re.compile("\x00(\\d+)\x00")
+TOPE_LINEA = 20000
 
 
 def en_linea(texto):
@@ -25,16 +26,21 @@ def en_linea(texto):
     guardados = []
 
     def guardar(m):
-        guardados.append("<code>%s</code>" % html.escape(m.group(2).strip(), quote=False))
+        guardados.append("<code>%s</code>" % html.escape(m.group(2).strip(), quote=True))
         return "\x00%d\x00" % (len(guardados) - 1)
 
     def enlace(m):
+        if "\x00" in m.group(2):              # un tramo de código dentro del destino: no es un enlace
+            return m.group(0)
         destino = html.unescape(m.group(2))
         if re.match(r"^https?://", destino):
             return '<a href="%s" rel="noopener noreferrer">%s</a>' % (html.escape(destino, quote=True), m.group(1))
         return '%s <span class="ruta">(%s)</span>' % (m.group(1), m.group(2))
 
-    t = _CODIGO.sub(guardar, texto.replace("\x00", ""))
+    texto = texto.replace("\x00", "")
+    if len(texto) > TOPE_LINEA:               # una línea desmedida va como texto, sin buscarle formato
+        return html.escape(texto, quote=True)
+    t = _CODIGO.sub(guardar, texto)
     t = html.escape(t, quote=True)
     t = _ENLACE.sub(enlace, t)
     t = _NEGRITA.sub(r"<strong>\1</strong>", t)
@@ -69,16 +75,64 @@ def _celdas(linea):
     return celdas
 
 
+def _es_separador(linea):
+    return bool(_SEPARADOR.match(linea.strip()))
+
+
+def _titulo(linea):
+    """(nivel, texto) si la línea es un título; si no, None. Sin expresiones que puedan atascarse."""
+    m = _TITULO.match(linea)
+    if not m:
+        return None
+    texto = m.group(2).rstrip()
+    sin_cierre = texto.rstrip("#")
+    if sin_cierre != texto and (not sin_cierre or sin_cierre[-1] in " \t"):
+        texto = sin_cierre.rstrip()
+    return len(m.group(1)), texto
+
+
+def sin_comentarios(texto):
+    """Quita los comentarios HTML fuera de los bloques de código, sin mover ninguna línea de lugar."""
+    salida, cierre, en_comentario = [], None, False
+    for linea in texto.split("\n"):
+        if cierre is not None:
+            salida.append(linea)
+            if cierre.match(linea):
+                cierre = None
+            continue
+        if not en_comentario:
+            m = _CERCA.match(linea)
+            if m:
+                cierre = re.compile(r"^\s*%s{%d,}\s*$" % (re.escape(m.group(2)[0]), len(m.group(2))))
+                salida.append(linea)
+                continue
+        resto, visible = linea, []
+        while True:
+            if en_comentario:
+                fin = resto.find("-->")
+                if fin < 0:
+                    break                      # sigue abierto: el resto de la línea no se muestra
+                resto, en_comentario = resto[fin + 3:], False
+            inicio = resto.find("<!--")
+            if inicio < 0:
+                visible.append(resto)
+                break
+            visible.append(resto[:inicio])
+            resto, en_comentario = resto[inicio + 4:], True
+        salida.append("".join(visible))
+    return "\n".join(salida)
+
+
 def _corta_parrafo(lineas, j):
     l = lineas[j]
     if not l.strip():
         return True
-    if _CERCA.match(l) or _TITULO.match(l) or _REGLA.match(l) or _ITEM.match(l):
+    if _CERCA.match(l) or _titulo(l) or _REGLA.match(l) or _ITEM.match(l):
         return True
     s = l.lstrip()
-    if s.startswith((">", "<!--")):
+    if s.startswith(">"):
         return True
-    return s.startswith("|") and j + 1 < len(lineas) and bool(_SEPARADOR.match(lineas[j + 1])) and "-" in lineas[j + 1]
+    return s.startswith("|") and j + 1 < len(lineas) and _es_separador(lineas[j + 1])
 
 
 def _lista(lineas, i, despl):
@@ -99,8 +153,7 @@ def _lista(lineas, i, despl):
                 j = k
                 continue
             break
-        if l[:1] not in (" ", "\t") and (_CERCA.match(l) or _TITULO.match(l) or _REGLA.match(l)
-                                         or l.startswith((">", "<!--", "|"))):
+        if l[:1] not in (" ", "\t") and (_CERCA.match(l) or _titulo(l) or _REGLA.match(l) or l.startswith((">", "|"))):
             break
         items[-1]["lineas"].append(l.strip())
         items[-1]["b"] = j + 1 + despl
@@ -128,23 +181,16 @@ def bloques(texto, despl=0):
                            "texto": "\n".join(cuerpo)})
             i = j + 1
             continue
-        if l.lstrip().startswith("<!--"):
-            j = i
-            while j < n and "-->" not in lineas[j]:
-                j += 1
-            i = j + 1
-            continue
-        m = _TITULO.match(l)
-        if m:
-            salida.append({"t": "h", "a": i + 1 + despl, "b": i + 1 + despl, "nivel": len(m.group(1)),
-                           "texto": m.group(2)})
+        titulo = _titulo(l)
+        if titulo:
+            salida.append({"t": "h", "a": i + 1 + despl, "b": i + 1 + despl, "nivel": titulo[0], "texto": titulo[1]})
             i += 1
             continue
         if _REGLA.match(l):
             salida.append({"t": "hr", "a": i + 1 + despl, "b": i + 1 + despl})
             i += 1
             continue
-        if l.lstrip().startswith("|") and i + 1 < n and _SEPARADOR.match(lineas[i + 1]) and "-" in lineas[i + 1]:
+        if l.lstrip().startswith("|") and i + 1 < n and _es_separador(lineas[i + 1]):
             j = i + 2
             while j < n and lineas[j].lstrip().startswith("|"):
                 j += 1
@@ -175,27 +221,29 @@ def bloques(texto, despl=0):
 
 
 class _Marcas:
-    """Decide qué bloques caen dentro de un pasaje señalado y cuál lleva el ancla de cada pasaje."""
+    """Decide qué bloques caen dentro de un pasaje señalado y dónde va el ancla de cada pasaje."""
 
     def __init__(self, rangos):
         self.rangos = [(int(a), int(b), str(ancla)) for a, b, ancla in rangos]
         self.usadas = set()
 
     def atributos(self, a, b, clases=()):
-        clases, ancla = list(clases), None
+        """(atributos del bloque, anclas de más). La primera cita nueva da el id; cada una de las demás, un ancla vacía."""
+        clases, anclas = list(clases), []
         for ra, rb, nombre in self.rangos:
             if a <= rb and b >= ra:
                 if "resaltado" not in clases:
                     clases.append("resaltado")
-                if ancla is None and nombre not in self.usadas:
-                    ancla = nombre
+                if nombre not in self.usadas:
+                    anclas.append(nombre)
                     self.usadas.add(nombre)
         partes = []
-        if ancla:
-            partes.append(' id="%s"' % html.escape(ancla, quote=True))
+        if anclas:
+            partes.append(' id="%s"' % html.escape(anclas[0], quote=True))
         if clases:
             partes.append(' class="%s"' % " ".join(clases))
-        return "".join(partes)
+        extra = "".join('<span class="ancla" id="%s"></span>' % html.escape(n, quote=True) for n in anclas[1:])
+        return "".join(partes), extra
 
 
 def _html_lista(items, marcas):
@@ -209,10 +257,18 @@ def _html_lista(items, marcas):
             pila.append((it["sangria"], etiqueta))
         else:
             out.append("</li>")
-        out.append("<li%s>%s" % (marcas.atributos(it["a"], it["b"]), en_linea(" ".join(it["lineas"]))))
+        atributos, extra = marcas.atributos(it["a"], it["b"])
+        out.append("<li%s>%s%s" % (atributos, extra, en_linea(" ".join(it["lineas"]))))
     while pila:
         out.append("</li></%s>" % pila.pop()[1])
     return "".join(out)
+
+
+def _html_fila(marcas, linea, celdas, etiqueta):
+    atributos, extra = marcas.atributos(linea, linea)
+    dentro = [en_linea(c) for c in celdas] or [""]
+    dentro[0] = extra + dentro[0]
+    return "<tr%s>%s</tr>" % (atributos, "".join("<%s>%s</%s>" % (etiqueta, c, etiqueta) for c in dentro))
 
 
 def _html(lista, marcas, base_titulos):
@@ -220,28 +276,23 @@ def _html(lista, marcas, base_titulos):
     for b in lista:
         t = b["t"]
         if t == "p":
-            out.append("<p%s>%s</p>" % (marcas.atributos(b["a"], b["b"]), en_linea(b["texto"])))
+            atributos, extra = marcas.atributos(b["a"], b["b"])
+            out.append("<p%s>%s%s</p>" % (atributos, extra, en_linea(b["texto"])))
         elif t == "h":
             nivel = min(6, b["nivel"] + base_titulos)
-            out.append("<h%d%s>%s</h%d>" % (nivel, marcas.atributos(b["a"], b["b"]), en_linea(b["texto"]), nivel))
+            atributos, extra = marcas.atributos(b["a"], b["b"])
+            out.append("<h%d%s>%s%s</h%d>" % (nivel, atributos, extra, en_linea(b["texto"]), nivel))
         elif t == "hr":
             out.append("<hr>")
         elif t == "pre":
-            if b["leng"] == "mermaid":
-                out.append("<pre%s>%s</pre>" % (marcas.atributos(b["a"], b["b"], ["mermaid"]),
-                                               html.escape(b["texto"], quote=False)))
-            else:
-                out.append("<pre%s><code>%s</code></pre>" % (marcas.atributos(b["a"], b["b"]),
-                                                            html.escape(b["texto"], quote=False)))
+            es_diagrama = b["leng"] == "mermaid"
+            atributos, extra = marcas.atributos(b["a"], b["b"], ["mermaid"] if es_diagrama else [])
+            molde = "%s<pre%s>%s</pre>" if es_diagrama else "%s<pre%s><code>%s</code></pre>"
+            out.append(molde % (extra, atributos, html.escape(b["texto"], quote=False)))
         elif t == "tabla":
-            filas = ["<tr%s>%s</tr>" % (marcas.atributos(b["a"], b["a"]),
-                                       "".join("<th>%s</th>" % en_linea(c) for c in b["cab"]))]
-            cuerpo = []
-            for linea, celdas in b["filas"]:
-                cuerpo.append("<tr%s>%s</tr>" % (marcas.atributos(linea, linea),
-                                                "".join("<td>%s</td>" % en_linea(c) for c in celdas)))
-            out.append('<div class="tabla"><table><thead>%s</thead><tbody>%s</tbody></table></div>'
-                       % ("".join(filas), "".join(cuerpo)))
+            cabeza = _html_fila(marcas, b["a"], b["cab"], "th")
+            cuerpo = "".join(_html_fila(marcas, linea, celdas, "td") for linea, celdas in b["filas"])
+            out.append('<div class="tabla"><table><thead>%s</thead><tbody>%s</tbody></table></div>' % (cabeza, cuerpo))
         elif t == "cita":
             out.append("<blockquote>%s</blockquote>" % _html(b["dentro"], marcas, base_titulos))
         elif t == "lista":
@@ -251,4 +302,5 @@ def _html(lista, marcas, base_titulos):
 
 def a_html(texto, rangos=(), base_titulos=1):
     """Convierte el documento. `rangos` son los pasajes a señalar: (línea inicial, línea final, ancla)."""
-    return _html(bloques(texto), _Marcas(rangos), base_titulos)
+    texto = texto.replace("\r\n", "\n").replace("\r", "\n")
+    return _html(bloques(sin_comentarios(texto)), _Marcas(rangos), base_titulos)

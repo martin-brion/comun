@@ -75,8 +75,10 @@ se señala la primera.
 ## 4. El documento con el pasaje señalado
 
 El markdown se convierte con un conversor propio: títulos, párrafos, listas, tablas, citas, bloques de código, reglas y el
-formato de línea. Lo que no reconoce queda como texto. Un comentario HTML no se muestra. Se señala el bloque que contiene
-el pasaje: el párrafo, el ítem de lista o la fila de tabla. Un bloque `mermaid` del documento se dibuja con el visor.
+formato de línea. Lo que no reconoce queda como texto. Un comentario HTML no se muestra, y el texto que lo rodea sí. Se
+señala el bloque que contiene el pasaje: el párrafo, el ítem de lista, la fila de tabla o el diagrama. Varias citas del
+mismo bloque tienen cada una su destino. Una cita que cae dentro de un comentario frena el armado. Un bloque `mermaid`
+del documento se dibuja con el visor.
 
 ## 5. El visor de diagramas
 
@@ -90,11 +92,14 @@ el pasaje: el párrafo, el ítem de lista o la fila de tabla. Un bloque `mermaid
 - Un diagrama dentro de un desplegable cerrado se dibuja al abrirlo.
 - En un diagrama de flujo se pueden usar tres clases sin definirlas: `cambia`, `nuevo` y `apagado`.
 - Si la librería no cargó o un diagrama falla, queda su texto a la vista. Nunca un hueco.
-- Al imprimir: sin controles, sin recorte y en esquema claro.
+- Al imprimir: sin controles y sin recorte. La página sale en esquema claro.
 - Rastro: `window.__visor_diagramas` es una línea de texto con la versión, si corrió y cuántos diagramas vio y dibujó.
 
 ## 6. Lo que todavía no hace
 
 - No resalta dentro del bloque: señala el bloque entero que contiene el pasaje.
+- Un diagrama conserva al imprimir los colores con que estaba dibujado en pantalla: conviene imprimir desde el esquema
+  claro.
+- Un comentario HTML dentro de un tramo de código en línea también se oculta.
 - El conversor de markdown no cubre notas al pie, HTML embebido ni listas de tareas.
 - El dibujo de los diagramas no tiene pruebas automáticas: se comprueba a mano (README).

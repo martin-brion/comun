@@ -2,7 +2,9 @@
 import copy
 import io
 import json
+import re
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -48,6 +50,39 @@ class Markdown(unittest.TestCase):
     def test_un_enlace_no_rompe_el_atributo(self):
         salida = en_linea('[x](https://ejemplo.invalid/"onmouseover="y)')
         self.assertNotIn('"onmouseover="', salida)
+
+    def test_codigo_dentro_del_destino_de_un_enlace_no_arma_un_atributo(self):
+        salida = en_linea('[x](https://ejemplo.invalid/`"onmouseover="alert(1)//`)')
+        self.assertNotIn("<a ", salida)
+        self.assertNotIn('"onmouseover', salida)
+
+    def test_un_comentario_no_se_lleva_el_texto_de_al_lado(self):
+        self.assertEqual(a_html("<!-- interno -->Texto que debe verse"), "<p>Texto que debe verse</p>")
+        self.assertEqual(a_html("antes <!-- interno --> después"), "<p>antes  después</p>")
+        self.assertEqual(a_html("uno\n<!-- a\nb -->\ndos"), "<p>uno</p>\n<p>dos</p>")
+
+    def test_un_comentario_dentro_de_un_bloque_de_codigo_se_conserva(self):
+        self.assertIn("&lt;!-- queda --&gt;", a_html("```\n<!-- queda -->\n```"))
+
+    def test_los_comentarios_no_mueven_las_lineas(self):
+        salida = a_html("<!-- a\nb\nc -->\n\nseñalado", [(5, 5, "cita-1")])
+        self.assertEqual(salida, '<p id="cita-1" class="resaltado">señalado</p>')
+
+    def test_un_titulo_con_mucho_espacio_no_atasca(self):
+        inicio = time.perf_counter()
+        self.assertEqual(bloques("# a" + " " * 200000 + "z")[0]["t"], "h")
+        en_linea("**" + "a " * 200000)
+        self.assertLess(time.perf_counter() - inicio, 2)
+
+    def test_titulos_con_y_sin_cierre(self):
+        self.assertEqual(a_html("## Título ##\n\n# C# es un lenguaje"), "<h3>Título</h3>\n<h2>C# es un lenguaje</h2>")
+
+    def test_dos_citas_del_mismo_bloque_tienen_cada_una_su_destino(self):
+        salida = a_html("un párrafo\n\n| a |\n|---|\n| b |", [(1, 1, "cita-1"), (1, 1, "cita-2"), (5, 5, "cita-3"),
+                                                              (5, 5, "cita-4")])
+        for ancla in ("cita-1", "cita-2", "cita-3", "cita-4"):
+            self.assertEqual(salida.count('id="%s"' % ancla), 1, ancla)
+        self.assertIn('<td><span class="ancla" id="cita-4"></span>b</td>', salida)
 
     def test_lista_anidada_y_ordenada(self):
         salida = a_html("1. uno\n   - adentro\n2. dos")
@@ -159,11 +194,29 @@ class Armado(unittest.TestCase):
         self.assertIn("la cita no está en casa:reglas.md", str(contexto.exception))
 
     def test_no_se_sale_de_la_raiz(self):
-        for ruta in ("casa:../fuera.md", "casa:/etc/passwd", "casa:a/../../b.md", "otra:reglas.md"):
+        for ruta in ("casa:../fuera.md", "casa:/etc/passwd", "casa:a/../../b.md", "otra:reglas.md", "casa:\\reglas.md",
+                     "casa:/reglas.md", "casa:./reglas.md", "casa:C:reglas.md", "casa:sub//reglas.md"):
             d = ejemplo()
             hallazgos(d)[0]["evidencia"][0]["archivo"] = ruta
-            with self.assertRaises(ErrorDatos):
+            with self.assertRaises(ErrorDatos, msg=ruta):
                 componer(d, RAICES)
+
+    def test_cada_enlace_a_un_documento_tiene_destino(self):
+        d = ejemplo()
+        hallazgos(d)[0]["evidencia"].append(dict(hallazgos(d)[0]["evidencia"][0]))
+        archivos = componer(d, RAICES)
+        indice = archivos["index.html"].decode("utf-8")
+        for pagina in sorted(a for a in archivos if a.startswith("doc/")):
+            documento = archivos[pagina].decode("utf-8")
+            for ancla in sorted(set(re.findall(r'href="%s#(cita-\d+)"' % re.escape(pagina), indice))):
+                self.assertEqual(documento.count('id="%s"' % ancla), 1, "%s#%s" % (pagina, ancla))
+
+    def test_una_cita_dentro_de_un_comentario_frena(self):
+        d = ejemplo()
+        hallazgos(d)[0]["evidencia"][0]["cita"] = "Documento inventado para las pruebas del componente."
+        with self.assertRaises(ErrorDatos) as contexto:
+            componer(d, RAICES)
+        self.assertIn("no se muestra", str(contexto.exception))
 
     def test_los_datos_no_inyectan_html(self):
         d = ejemplo()
@@ -224,6 +277,38 @@ class Armado(unittest.TestCase):
             with self.assertRaises(ErrorDatos):
                 armar(ejemplo(), RAICES, tmp)
             self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["algo.txt"])
+
+    def test_un_registro_danado_no_borra_nada(self):
+        for registro in ('{"archivos": ["index.html", null]}', '{"archivos": ["../afuera.txt"]}',
+                         '{"archivos": "index.html"}', "no es json", '{"otra": 1}',
+                         '{"archivos": ["C:/afuera.txt"]}', '{"archivos": ["doc\\\\..\\\\..\\\\afuera.txt"]}'):
+            with tempfile.TemporaryDirectory() as tmp:
+                salida = Path(tmp) / "sitio"
+                armar(ejemplo(), RAICES, salida)
+                (Path(tmp) / "afuera.txt").write_text("ajeno", encoding="utf-8")
+                (salida / MANIFIESTO).write_text(registro, encoding="utf-8")
+                with self.assertRaises(ErrorDatos):
+                    armar(ejemplo(), RAICES, salida)
+                self.assertTrue((salida / "index.html").is_file(), registro)
+                self.assertTrue((Path(tmp) / "afuera.txt").is_file(), registro)
+
+    def test_no_borra_ni_escribe_a_traves_de_un_enlace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            salida, externa = Path(tmp) / "sitio", Path(tmp) / "externa"
+            armar(ejemplo(), RAICES, salida)
+            externa.mkdir()
+            (externa / "casa-reglas-md.html").write_text("ajeno", encoding="utf-8")
+            for hijo in (salida / "doc").iterdir():
+                hijo.unlink()
+            (salida / "doc").rmdir()
+            try:
+                (salida / "doc").symlink_to(externa, target_is_directory=True)
+            except OSError:
+                self.skipTest("este sistema no deja crear enlaces sin permisos")
+            with self.assertRaises(ErrorDatos):
+                armar(ejemplo(), RAICES, salida)
+            self.assertEqual((externa / "casa-reglas-md.html").read_text(encoding="utf-8"), "ajeno")
+            self.assertEqual(sorted(p.name for p in externa.iterdir()), ["casa-reglas-md.html"])
 
     def test_si_falla_no_escribe_nada(self):
         d = ejemplo()

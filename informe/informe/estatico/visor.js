@@ -48,7 +48,8 @@
     /* Tamaño inicial: entero si entra; si no, achicado hasta 55 % y el resto se recorre arrastrando. */
     this.medir = function () {
       var ancho = marco.clientWidth, w = lienzo.offsetWidth, h = lienzo.offsetHeight;
-      if (!ancho || !w) return;
+      if (!ancho || !w) { yo.medido = false; return; }
+      yo.medido = true;
       yo.k0 = Math.min(1, Math.max(0.55, ancho / w));
       yo.x0 = Math.max(0, (ancho - w * yo.k0) / 2);
       marco.style.height = Math.round(Math.min(h * yo.k0, window.innerHeight * 0.7)) + 'px';
@@ -132,11 +133,13 @@
       else return;
       e.preventDefault();
     });
-    document.addEventListener('fullscreenchange', function () {
+    function alCambiarPantalla() {
       if (yo.llena && !document.fullscreenElement && !marco.classList.contains('lupa-fija')) {
         yo.llena = false; marco.classList.remove('lupa-llena'); yo.medir(); yo.inicio();
       }
-    });
+    }
+    document.addEventListener('fullscreenchange', alCambiarPantalla);
+    this.descartar = function () { document.removeEventListener('fullscreenchange', alCambiarPantalla); };
   }
 
   function boton(barra, simbolo, titulo, accion) {
@@ -173,9 +176,13 @@
       });
     };
     return v.dibujar().then(function () {
+      var destino = pre.id;
+      if (destino) { pre.removeAttribute('id'); marco.id = destino; }
+      if (pre.classList.contains('resaltado')) marco.classList.add('resaltado');
       pre.remove(); visores.push(v); D.dibujados += 1;
+      if (destino && location.hash === '#' + destino) marco.scrollIntoView({ block: 'center' });
     }).catch(function (error) {
-      marco.remove(); pre.hidden = false;
+      v.descartar(); marco.remove(); pre.hidden = false;
       D.error = String(error && error.message || error).slice(0, 160);
       var aviso = document.createElement('p');
       aviso.className = 'lupa-error'; aviso.textContent = 'Este diagrama no se pudo dibujar; queda su texto.';
@@ -205,7 +212,11 @@
     if (!window.mermaid) { D.error = 'sin la libreria de diagramas'; rastro(); return; }
     try { configurar(); } catch (error) { D.error = String(error).slice(0, 160); rastro(); return; }
     buscar();
-    document.addEventListener('toggle', function (e) { if (e.target.open) buscar(); }, true);
+    document.addEventListener('toggle', function (e) {
+      if (!e.target.open) return;
+      buscar();
+      visores.forEach(function (v) { if (!v.llena && !v.medido) { v.medir(); v.inicio(); } });
+    }, true);
     window.addEventListener('hashchange', function () { setTimeout(buscar, 0); });
     var espera = null;
     window.addEventListener('resize', function () {

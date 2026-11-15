@@ -116,7 +116,9 @@ pre.mermaid{margin:0;font:400 12.5px/1.5 var(--f-mono);background:var(--superfic
 li.resaltado{box-shadow:inset 3px 0 0 var(--aviso);padding-left:8px;border-radius:3px}
 tr.resaltado{box-shadow:none} tr.resaltado td,tr.resaltado th{background:var(--marca)}
 tr.resaltado td:first-child,tr.resaltado th:first-child{box-shadow:inset 4px 0 0 var(--aviso)}
-:target.resaltado{outline:2px solid var(--aviso);outline-offset:3px}
+.resaltado.destino,.lupa.destino{outline:2px solid var(--aviso);outline-offset:3px}
+.lupa.resaltado{box-shadow:0 0 0 3px var(--marca)}
+.ancla{display:inline-block;width:0;height:0;scroll-margin-top:90px}
 @media (prefers-reduced-motion:reduce){ html{scroll-behavior:auto} .lupa-barra{transition:none} }
 @media print{
   :root{--fondo:#FFFFFF;--superficie:#FFFFFF;--hundido:#F1F3F5;--tinta:#111111;--tinta-suave:#444444;--linea:#BBBBBB;--linea-fuerte:#888888;--marca:#FFF3B8;color-scheme:light}
