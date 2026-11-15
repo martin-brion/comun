@@ -46,7 +46,7 @@ class Corrida(Base):
         r = self.correr()
         self.assertEqual(len(r["cambios"]["nuevas"]), 1)
         self.assertIn("postgres: 16.15 → 16.16 (parche)", r["resumen"])
-        self.assertIn("No se aplicó nada", r["resumen"])
+        self.assertIn("Observar no aplica nada", r["resumen"])
         self.assertIn("Al día: 0 · atrasadas: 1 · sin poder saber: 0 · propias: 1", r["resumen"])
         with open(r["ficha"], encoding="utf-8") as f:
             ficha = f.read()
