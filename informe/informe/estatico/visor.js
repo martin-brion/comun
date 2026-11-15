@@ -44,6 +44,7 @@
     var yo = this;
     this.marco = marco; this.lienzo = lienzo; this.pct = pct;
     this.k = 1; this.x = 0; this.y = 0; this.k0 = 1; this.x0 = 0; this.punteros = {}; this.llena = false;
+    this.bk = 1; this.bx = 0; this.by = 0;      /* el encuadre de partida: contra él se sabe si alguien lo movió */
 
     /* Tamaño inicial: entero si entra; si no, achicado hasta 55 % y el resto se recorre arrastrando. */
     this.medir = function () {
@@ -58,6 +59,8 @@
     this.aplicar = function () {
       lienzo.style.transform = 'translate(' + yo.x + 'px,' + yo.y + 'px) scale(' + yo.k + ')';
       pct.textContent = Math.round(yo.k * 100) + ' %';
+      var movido = Math.abs(yo.k - yo.bk) > 0.001 || Math.abs(yo.x - yo.bx) > 1 || Math.abs(yo.y - yo.by) > 1;
+      marco.classList.toggle('lupa-movida', movido);
     };
     this.zoom = function (factor, px, py) {
       var caja = marco.getBoundingClientRect();
@@ -67,12 +70,15 @@
       yo.y = py - (py - yo.y) * (k2 / yo.k);
       yo.k = k2; yo.aplicar();
     };
-    this.inicio = function () { yo.k = yo.k0; yo.x = yo.x0; yo.y = 0; yo.aplicar(); };
+    this.fijar = function () { yo.bk = yo.k; yo.bx = yo.x; yo.by = yo.y; yo.aplicar(); };
+    this.inicio = function () { yo.k = yo.k0; yo.x = yo.x0; yo.y = 0; yo.fijar(); };
+    /* Vuelve al encuadre de partida: el tamaño inicial o, en pantalla completa, el ajuste a la pantalla. */
+    this.volver = function () { if (yo.llena) yo.ajustar(); else yo.inicio(); };
     this.ajustar = function () {
       var ancho = marco.clientWidth, alto = marco.clientHeight, w = lienzo.offsetWidth, h = lienzo.offsetHeight;
       if (!w || !h) return;
       var k = Math.min(MAXIMO, Math.max(MINIMO, Math.min(ancho / w, alto / h) * 0.95));
-      yo.k = k; yo.x = (ancho - w * k) / 2; yo.y = (alto - h * k) / 2; yo.aplicar();
+      yo.k = k; yo.x = (ancho - w * k) / 2; yo.y = (alto - h * k) / 2; yo.fijar();
     };
     this.entrar = function () {
       function listo() { yo.llena = true; marco.style.height = ''; marco.classList.add('lupa-llena'); setTimeout(yo.ajustar, 80); }
@@ -127,7 +133,7 @@
       var k = e.key;
       if (k === '+' || k === '=') yo.zoom(PASO);
       else if (k === '-' || k === '_') yo.zoom(1 / PASO);
-      else if (k === '0') yo.inicio();
+      else if (k === '0') yo.volver();
       else if (k === 'f' || k === 'F') yo.alternar();
       else if (k === 'Escape' && yo.llena) yo.salir();
       else return;
@@ -150,6 +156,16 @@
     return b;
   }
 
+  /* El botón de volver: discreto mientras nadie movió el dibujo, con su texto y a la vista cuando alguien lo movió. */
+  function botonVolver(barra, v) {
+    var b = boton(barra, '', 'Volver al encuadre', function () { v.volver(); });
+    b.className = 'lupa-volver';
+    var signo = document.createElement('span'); signo.textContent = '⟲';
+    var texto = document.createElement('span'); texto.className = 'lupa-volver-texto'; texto.textContent = ' Volver al encuadre';
+    b.appendChild(signo); b.appendChild(texto);
+    return b;
+  }
+
   function montar(pre) {
     var fuente = pre.textContent;
     var marco = document.createElement('div');
@@ -164,7 +180,7 @@
     barra.appendChild(pct);
     boton(barra, '+', 'Acercar', function () { v.zoom(PASO); });
     boton(barra, '⤢', 'Pantalla completa', function () { v.alternar(); });
-    boton(barra, '⟲', 'Volver al tamaño original', function () { v.inicio(); });
+    botonVolver(barra, v);
     marco.appendChild(barra); marco.appendChild(lienzo);
     pre.insertAdjacentElement('beforebegin', marco);
     pre.hidden = true;
@@ -209,7 +225,7 @@
     barra.appendChild(pct);
     boton(barra, '+', 'Acercar', function () { v.zoom(PASO); });
     boton(barra, '⤢', 'Pantalla completa', function () { v.alternar(); });
-    boton(barra, '⟲', 'Volver al tamaño original', function () { v.inicio(); });
+    botonVolver(barra, v);
     lienzo.appendChild(svg);
     marco.appendChild(barra); marco.appendChild(lienzo);
     caja.appendChild(marco);
@@ -222,6 +238,9 @@
     var pendientes = document.querySelectorAll('.mapa-dibujo:not([data-visor])');
     for (var i = 0; i < pendientes.length; i++) {
       if (!visible(pendientes[i])) continue;
+      var hecho = pendientes[i].querySelector('svg');
+      var natural = hecho ? parseFloat(hecho.getAttribute('width')) : 0;
+      if (natural && natural <= pendientes[i].clientWidth + 1) continue;   /* entra entero: no necesita lupa */
       pendientes[i].dataset.visor = 'listo'; D.vistos += 1;
       try { montarHecho(pendientes[i]); } catch (error) { D.error = String(error).slice(0, 160); }
     }
@@ -262,6 +281,7 @@
       clearTimeout(espera);
       espera = setTimeout(function () {
         visores.forEach(function (v) { if (!v.llena) { v.medir(); v.inicio(); } });
+        buscarHechos(); rastro();           /* un mapa que dejó de entrar recibe su lupa */
       }, 150);
     });
     if (window.matchMedia) {

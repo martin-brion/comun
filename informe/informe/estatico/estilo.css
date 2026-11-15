@@ -116,6 +116,11 @@ pre.mermaid{margin:0;font:400 12.5px/1.5 var(--f-mono);background:var(--superfic
 .lupa-barra button:hover{background:var(--hundido)}
 .lupa-barra button:focus-visible{outline:2px solid var(--acento)}
 .lupa-pct{font:500 12px var(--f-mono);min-width:48px;text-align:center;color:var(--tinta-suave)}
+.lupa-movida .lupa-barra{opacity:1}
+.lupa-volver-texto{display:none}
+.lupa-movida .lupa-volver{background:var(--acento);color:var(--fondo);padding:0 10px;font-size:13px;font-weight:600}
+.lupa-movida .lupa-volver:hover{background:var(--acento);filter:brightness(1.08)}
+.lupa-movida .lupa-volver-texto{display:inline}
 .lupa-llena{max-height:none;border-radius:0;border:0;height:100%}
 .lupa-fija{position:fixed;inset:0;z-index:50;max-height:none;border-radius:0;height:auto}
 .lupa-error{font-size:13px;color:var(--critico)}

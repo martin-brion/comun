@@ -123,7 +123,12 @@ del documento se dibuja con el visor.
 - La librería de diagramas se pide solo en las páginas que traen un diagrama escrito como texto.
 - Tamaño inicial: entero si entra en la columna; si no, achicado hasta el 55 % y el resto se recorre arrastrando. Alto
   máximo: 70 % de la ventana.
-- Lupa: `−`, porcentaje, `+`, pantalla completa y volver al inicio. Paso de ×1,25, entre 40 % y 800 %.
+- **Un mapa que entra entero en la columna no lleva lupa**: queda fijo, como una imagen. La recibe solo si no entra
+  (una pantalla angosta o un mapa de muchas columnas). El diagrama escrito como texto la lleva siempre.
+- Lupa: `−`, porcentaje, `+`, pantalla completa y volver al encuadre. Paso de ×1,25, entre 40 % y 800 %.
+- **Volver al encuadre.** Apenas alguien acerca, aleja o mueve el dibujo, la barra se pone opaca y el botón de volver
+  se destaca con su texto. Un clic, o la tecla `0`, devuelve el encuadre de partida: el tamaño inicial o, en pantalla
+  completa, el ajuste a la pantalla.
 - La rueda sola mueve la página; con Ctrl (o Cmd) hace zoom en el punto del cursor. En pantalla completa hace zoom sola.
 - Arrastre con mouse o dedo; pellizco con dos dedos; doble clic para pantalla completa.
 - Teclado, con foco en el diagrama: `+`, `-`, `0`, `f`, `Esc`.
