@@ -116,7 +116,7 @@ def resumen(corrida):
         urgentes = [p for p in s["piezas"] if (p.get("vulnerabilidades") or {}).get("kev")]
         for p in urgentes:
             r += [f"  ! {_corta(p['pieza'])}: tiene vulnerabilidades con explotación conocida; falta verificar si aplican"]
-    r += ["No se aplicó nada: esta versión solo mira."]
+    r += ["Observar no aplica nada: lo aplica el ejecutor, en su ventana."]
     return "\n".join(r) + "\n"
 
 
