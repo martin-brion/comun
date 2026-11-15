@@ -180,6 +180,49 @@ class Propias(Base):
         p = self.una([("bot", "propio/bot:0.6.30", 1)], red, imagenes={1: {"creada": "2026-12-20T00:00:00Z"}}, cfg=cfg)
         self.assertEqual((p["estado"], p["notas"]), ("propia", []))
 
+    def rotulada(self, huella, red, nivel="patch"):
+        cfg = config.validar(datos.config(self.tmp.name, componentes={
+            "docker.io/propio/bot": {"base": "python:3.13-slim", "nivel": nivel, "playbook": "propia"}}))
+        rotulos = {"org.opencontainers.image.base.name": "docker.io/library/python:3.13-slim",
+                   "org.opencontainers.image.base.digest": huella}
+        return self.una([("bot", "propio/bot:0.6.30", 1)], red, cfg=cfg,
+                        imagenes={1: {"creada": "2026-12-20T00:00:00Z", "etiquetas": rotulos}})
+
+    def test_con_la_huella_de_su_base_en_los_rotulos_propone_rehacerla(self):
+        red = Red().hub("library/python", [tag("3.13-slim", VIEJA, H2)])
+        p = self.rotulada(H, red)
+        c = p["candidata"]
+        self.assertEqual((p["estado"], c["salto"], c["compuerta_version"]), ("base renovada", "patch", "pasaría"))
+        self.assertEqual(c["referencia"], f"docker.io/library/python:3.13-slim@{H2}")
+        self.assertEqual(c["anterior"], f"docker.io/library/python:3.13-slim@{H}")
+        self.assertEqual((c["indice"], c["actual"], c["propuesta"]), (H2, "base " + H[7:19], "base " + H2[7:19]))
+        self.assertTrue(all("propio" not in u for u, _ in red.pedidos))   # se consulta la base, nunca la imagen propia
+
+    def test_con_la_misma_base_que_la_publicada_no_propone_nada(self):
+        p = self.rotulada(H, Red().hub("library/python", [tag("3.13-slim", VIEJA, H)]))
+        self.assertEqual((p["estado"], p["candidata"], p["base"]), ("propia", None, "base " + H[7:19]))
+
+    def test_una_base_nueva_espera_a_madurar(self):
+        p = self.rotulada(H, Red().hub("library/python", [tag("3.13-slim", NUEVA, H2)]))
+        self.assertTrue(p["candidata"]["compuerta_version"].startswith("espera: madura"))
+
+    def test_sin_nivel_declarado_no_se_rehace_sola(self):
+        p = self.rotulada(H, Red().hub("library/python", [tag("3.13-slim", VIEJA, H2)]), nivel="nunca")
+        self.assertEqual(p["candidata"]["compuerta_version"], "fuera: la pieza no admite aplicación automática")
+
+    def test_sin_poder_consultar_la_base_no_es_al_dia(self):
+        p = self.rotulada(H, Red())
+        self.assertEqual((p["candidata"], p["estado"]), (None, "propia"))
+        self.assertTrue(any("no se pudo saber" in n for n in p["notas"]))
+
+    def test_sin_huella_en_los_rotulos_no_propone_rehacerla_sola(self):
+        cfg = config.validar(datos.config(self.tmp.name, componentes={
+            "docker.io/propio/bot": {"base": "python:3.13-slim", "nivel": "patch", "playbook": "propia"}}))
+        red = Red().hub("library/python", [tag("3.13-slim", "2027-01-10T00:00:00Z", H)])
+        p = self.una([("bot", "propio/bot:0.6.30", 1)], red, imagenes={1: {"creada": "2026-12-20T00:00:00Z"}}, cfg=cfg)
+        self.assertEqual((p["estado"], p["candidata"]), ("base renovada", None))
+        self.assertTrue(any("no se puede rehacer sola" in n for n in p["notas"]))
+
 
 class Sistema(Base):
     def test_resume_paquetes_y_reinicio(self):

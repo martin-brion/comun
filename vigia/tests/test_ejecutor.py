@@ -548,5 +548,177 @@ class Plazo(Base):
         self.assertEqual(estado.incidentes(self.db()), [])
 
 
+BOT = "docker.io/propio/bot"
+BASE = "docker.io/library/python:3.13-slim"
+CON_PROPIAS = {"respaldo_vigente": ["accion", "respaldo"],
+               "construir_propia": ["accion", "construir", "{servicio}", "{base}"],
+               "aplicar_propia": ["accion", "aplicar-propia", "{servicio}", "{base}"],
+               "verificar": ["accion", "verificar", "{servicio}"],
+               "volver_propia": ["accion", "volver-propia", "{servicio}", "{base}"]}
+
+
+class ServidorPropio:
+    """Imágenes propias armadas en el servidor: cada servicio corre la imagen armada sobre una base (por su huella)."""
+
+    def __init__(self, servicios):
+        self.servicios = dict(servicios)            # nombre -> huella de la base con que corre
+        self.originales = dict(servicios)
+        self.armadas = set(servicios.values())      # bases sobre las que hay una imagen armada y guardada
+        self.llamadas = []
+        self.respaldo = True
+        self.falla_construir = set()
+        self.falla_verificar = set()                # no verifica sobre una base distinta de la original
+        self.falla_volver = set()
+        self.corte = None                           # (orden, servicio): muere en esa acción, antes del efecto
+
+    def tomar(self, servidor, ahora, vigencia):
+        contenedores, imagenes = [], {}
+        for nombre, huella in sorted(self.servicios.items()):
+            numero = int(huella[-8:], 16)
+            contenedores.append((nombre, "propio/bot:0.6.30", numero))
+            imagenes[numero] = {"creada": "2026-12-20T00:00:00Z", "tags": ["propio/bot:0.6.30"],
+                                "etiquetas": {"org.opencontainers.image.base.name": BASE,
+                                              "org.opencontainers.image.base.digest": huella}}
+        cruda = datos.foto(contenedores, imagenes)
+        cruda["tomada"] = ahora
+        return {"nombre": servidor["nombre"], "estado": "ok", "motivo": "", "foto": censo.limpiar(cruda, ahora, vigencia)}
+
+    def correr(self, argv, tope):
+        self.llamadas.append(argv[1:])
+        orden, resto = argv[1], argv[2:]
+        if self.corte == (orden, resto[0] if resto else None):
+            raise Corte()
+        if orden == "respaldo":
+            return 0 if self.respaldo else 1
+        if orden == "construir":
+            servicio, base = resto
+            if servicio in self.falla_construir:
+                return 1
+            self.armadas.add(base.rpartition("@")[2])
+            return 0
+        if orden in ("aplicar-propia", "volver-propia"):
+            servicio, base = resto
+            huella = base.rpartition("@")[2]
+            if huella not in self.armadas or (orden == "volver-propia" and servicio in self.falla_volver):
+                return 1
+            self.servicios[servicio] = huella
+            return 0
+        if orden == "verificar":
+            nueva = self.servicios[resto[0]] != self.originales[resto[0]]
+            return 1 if (nueva and resto[0] in self.falla_verificar) else 0
+        return 1
+
+
+class Propias(Base):
+    def setUp(self):
+        super().setUp()
+        self.cfg = self.config(componentes={BOT: {"base": "python:3.13-slim", "nivel": "patch", "playbook": "propia"}},
+                               acciones={"principal": CON_PROPIAS}, playbooks=["propia"])
+        self.s = ServidorPropio({"bot": H})
+        self.red = Red().hub("library/python", [tag("3.13-slim", VIEJA, H2)])
+
+    def pasos(self):
+        return [(e["paso"], e["resultado"]) for e in estado.diario(self.db())]
+
+    def test_arma_aplica_verifica_y_cierra(self):
+        acta = self.aplicar(presente=True)
+        self.assertEqual(acta["pasos"][0]["resultado"], "aplicada")
+        self.assertEqual(self.s.llamadas, [["respaldo"], ["construir", "bot", f"{BASE}@{H2}"],
+                                           ["aplicar-propia", "bot", f"{BASE}@{H2}"], ["verificar", "bot"]])
+        self.assertEqual(self.s.servicios["bot"], H2)
+        self.assertEqual(self.pasos(), [("construir", "hecho"), ("aplicar", "hecho")])
+        self.assertTrue(estado.estrenado(self.db(), "propia"))
+        self.assertFalse(estado.estrenado(self.db(), "imagen"))
+        self.assertEqual(self.candidata("base " + H2[7:19])["estado"], "cerrada")
+
+    def test_la_corrida_siguiente_la_ve_al_dia(self):
+        self.aplicar(presente=True)
+        cambios = corrida.correr(self.cfg, AHORA + 60, tomar=self.s.tomar, pedir=self.red,
+                                 escanear=lambda *a: {})["cambios"]
+        self.assertEqual(cambios["nuevas"], [])
+        self.assertEqual(self.candidata("base " + H2[7:19])["estado"], "cerrada")
+
+    def test_el_estreno_de_propia_pide_al_dueno_aunque_imagen_ya_se_estreno(self):
+        estado.estrenar(self.db(), "imagen", "otra", AHORA)
+        (paso,) = self.aplicar()["pasos"]
+        self.assertEqual([n for n, ok, _ in paso["compuertas"] if not ok], ["estreno"])
+        self.assertEqual(self.s.llamadas, [])
+
+    def test_si_no_se_arma_no_toca_lo_que_corre(self):
+        self.s.falla_construir = {"bot"}
+        acta = self.aplicar(presente=True)
+        self.assertEqual(acta["pasos"][0]["resultado"], "falló; quedó como estaba")
+        self.assertEqual(self.ordenes(), ["respaldo", "construir"])
+        self.assertEqual(self.s.servicios["bot"], H)
+        self.assertEqual(self.pasos(), [("construir", "fallo")])
+        self.assertEqual(self.candidata("base " + H2[7:19])["estado"], "esperando")
+        self.assertFalse(estado.estrenado(self.db(), "propia"))
+
+    def test_dos_armados_fallidos_escalan(self):
+        self.s.falla_construir = {"bot"}
+        self.aplicar(presente=True)
+        self.ahora = AHORA + 7 * DIA
+        self.aplicar(presente=True)
+        self.assertEqual(self.candidata("base " + H2[7:19])["estado"], "escalada")
+        self.assertEqual([i["clase"] for i in estado.incidentes(self.db())], ["no entró"])
+
+    def test_si_no_verifica_vuelve_a_la_imagen_de_la_base_anterior(self):
+        self.s.falla_verificar = {"bot"}
+        acta = self.aplicar(presente=True)
+        self.assertEqual(acta["pasos"][0]["resultado"], "falló; quedó como estaba")
+        self.assertEqual(self.s.llamadas[3:], [["verificar", "bot"], ["volver-propia", "bot", f"{BASE}@{H}"],
+                                               ["verificar", "bot"]])
+        self.assertEqual(self.s.servicios["bot"], H)
+        self.assertEqual(self.pasos(), [("construir", "hecho"), ("aplicar", "fallo"), ("volver", "hecho")])
+
+    def test_si_la_vuelta_atras_falla_escala_y_frena(self):
+        self.s.falla_verificar = {"bot"}
+        self.s.falla_volver = {"bot"}
+        acta = self.aplicar(presente=True, cfg=self.config(
+            componentes={BOT: {"base": "python:3.13-slim", "nivel": "patch", "playbook": "propia"}},
+            acciones={"principal": CON_PROPIAS}, playbooks=["propia"], aviso=["accion", "avisar"]))
+        self.assertEqual(acta["pasos"][0]["resultado"], "falló y la vuelta atrás también")
+        self.assertEqual([i["clase"] for i in estado.incidentes(self.db())], ["vuelta atrás fallida"])
+        self.assertEqual(self.s.llamadas[-1], ["avisar", acta["avisos"][0]])
+
+    def test_una_imagen_que_usan_dos_servicios_se_rehace_en_los_dos(self):
+        self.s = ServidorPropio({"bot-a": H, "bot-b": H})
+        acta = self.aplicar(presente=True)
+        self.assertEqual(acta["pasos"][0]["resultado"], "aplicada")
+        self.assertEqual(self.s.servicios, {"bot-a": H2, "bot-b": H2})
+
+    def test_corte_durante_el_armado_no_toco_nada_y_se_reintenta(self):
+        self.s.corte = ("construir", "bot")
+        with self.assertRaises(Corte):
+            self.aplicar(presente=True)
+        self.s.corte = None
+        self.s.llamadas.clear()
+        acta = self.aplicar(presente=True)
+        self.assertEqual(estado.diario(self.db())[0]["resultado"], "no aplicado")
+        self.assertEqual(acta["pasos"][0]["resultado"], "aplicada")
+
+    def test_corte_despues_de_aplicar_no_repite(self):
+        original = self.s.correr
+
+        def muere(argv, tope):
+            r = original(argv, tope)
+            if argv[1] == "aplicar-propia":
+                raise Corte()
+            return r
+        self.s.correr = muere
+        with self.assertRaises(Corte):
+            self.aplicar(presente=True)
+        self.s.correr = original
+        self.s.llamadas.clear()
+        self.aplicar(presente=True)
+        self.assertNotIn("aplicar-propia", self.ordenes())
+        self.assertEqual(self.candidata("base " + H2[7:19])["estado"], "cerrada")
+
+    def test_la_base_se_valida_antes_de_armar_el_comando(self):
+        self.assertFalse(ejecutor.accion(self.cfg, "principal", "construir_propia",
+                                         {"servicio": "bot", "base": "python:3.13-slim; rm -rf /"}, self.s.correr))
+        self.assertEqual(self.s.llamadas, [])
+
+
 if __name__ == "__main__":
     unittest.main()

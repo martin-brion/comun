@@ -1,6 +1,6 @@
 # Contrato de vigia
 
-Versión del contrato: 0.3.0-dev.1. Lo que sigue no cambia sin decirlo en el pedido antes de cortar.
+Versión del contrato: 0.4.0-dev.1. Lo que sigue no cambia sin decirlo en el pedido antes de cortar.
 
 ## 1. Reglas que no se negocian
 
@@ -58,6 +58,13 @@ Una pieza es una imagen distinta que corre en un servidor. Estados: `al día`, `
 La candidata es el paso más chico disponible dentro de la misma familia de etiquetas (mismo prefijo, misma variante,
 misma cantidad de números; las preliminares no cuentan). Los pasos más grandes se informan aparte, sin proponerlos.
 
+**Una imagen propia** no se consulta afuera: se consulta su base. Si la imagen dice en sus rótulos sobre qué base se armó,
+con nombre y huella (`org.opencontainers.image.base.name` y `org.opencontainers.image.base.digest`), y esa etiqueta de la
+base apunta hoy a otra huella, la candidata es rehacer la misma imagen sobre la base nueva: `salto` `patch`, `actual` y
+`propuesta` dicen `base <12 primeros de la huella>`, `referencia` es la base nueva con huella y `anterior`, la base de hoy
+con huella. La pieza propia informa `base` con la que corre, y la candidata se cierra cuando corre sobre la nueva. Sin la
+huella en los rótulos solo se avisa que la base se renovó, por fecha: no se propone rehacerla.
+
 ```
 {"id", "servidor", "pieza", "actual", "propuesta", "salto": "patch" | "minor" | "mayor", "publicada", "madura",
  "nivel", "expuesto", "compuerta_version", "nota", "detectada", "plazo": {"clase", "vence"},
@@ -100,6 +107,10 @@ Códigos de salida de `python -m vigia`: 0 bien, 1 sin corrida previa, 2 configu
 - `datos`: lo mismo, para una pieza que guarda datos. Antes de aplicar llama `respaldar_datos` con una marca propia de
   ese intento. Si la versión nueva falla, llama `restaurar_datos` con esa misma marca y recién después `volver_imagen`:
   la imagen anterior nunca arranca sobre datos que la nueva ya migró. Cada tipo tiene su propio estreno.
+- `propia`: rehace una imagen propia, igual, sobre la versión nueva de su base (§3). Primero `construir_propia` la arma y la
+  prueba aislada, sin tocar lo que corre; recién después `aplicar_propia` la pone a correr. Lo que se mide es la huella de
+  la base en los rótulos de la imagen con que corre el servicio. Su vuelta atrás es la imagen armada sobre la base
+  anterior, que la instancia conserva: `volver_propia`. Como no cambia el código, no migra datos.
 
 El respaldo es de la instancia. El vigía pide por nombre (¿hay uno vigente?, copiá esto, reponé esto) y no sabe qué
 sistema responde: cambiar de servicio de respaldo es cambiar los comandos de `acciones`.
@@ -114,9 +125,12 @@ sistema responde: cambiar de servicio de respaldo es cambiar los comandos de `ac
 | `volver_imagen` | `{servicio}`, `{referencia}` | Deja el servicio corriendo con la imagen anterior. |
 | `respaldar_datos` | `{servicio}`, `{marca}` | Detiene el servicio, copia sus datos bajo esa marca, comprueba la copia y lo deja **detenido**. Cero solo con la copia comprobada. |
 | `restaurar_datos` | `{servicio}`, `{marca}` | Detiene el servicio, repone los datos de esa marca y lo deja **detenido**. Cero solo si quedaron repuestos. Sin esa marca, falla: nunca repone otra copia. |
+| `construir_propia` | `{servicio}`, `{base}` | Arma la imagen de ese servicio, la misma versión que corre, sobre esa base, con su nombre y su huella en los rótulos, y la prueba aislada (sin red ni datos reales). Cero solo si quedó armada y pasó su prueba. No cambia lo que corre. Conserva la imagen que corre hoy. Repetirla con los mismos valores no cambia nada. |
+| `aplicar_propia` | `{servicio}`, `{base}` | Deja el servicio corriendo con la imagen armada sobre esa base. Sin esa imagen armada, falla. |
+| `volver_propia` | `{servicio}`, `{base}` | Deja el servicio corriendo con la imagen armada sobre esa base anterior, la que conservó. |
 
-`{servicio}` es el nombre del servicio de compose (`^[a-z0-9][a-z0-9_.-]{0,62}$`); `{referencia}`, una imagen con huella;
-`{marca}`, un identificador que pone el vigía (`^m[0-9]{9,12}$`). Una acción tiene 15 minutos; pasado ese tiempo cuenta
+`{servicio}` es el nombre del servicio de compose (`^[a-z0-9][a-z0-9_.-]{0,62}$`); `{referencia}` y `{base}`, una imagen
+con huella; `{marca}`, un identificador que pone el vigía (`^m[0-9]{9,12}$`). Una acción tiene 15 minutos; pasado ese tiempo cuenta
 como falla.
 
 Con `datos`, lo que el servicio haya escrito entre la copia y la restauración se pierde: por eso la copia se toma con el
@@ -126,7 +140,11 @@ servicio detenido y justo antes. Retirar copias viejas es de la instancia, y nun
 copia falla, no aplica: `volver_imagen` levanta lo que había. Si falla después, `restaurar_datos` → `volver_imagen` →
 sano → `verificar`. Si la restauración falla, no levanta la imagen anterior: escala y frena la ventana.
 
-**Tras un corte.** Una copia a medias con el servicio corriendo lo de siempre es «no aplicado». Una copia a medias con el
+**Orden de un intento con `propia`.** `construir_propia` → `aplicar_propia` → sano y sobre la base pedida → `verificar`.
+Si el armado falla, no se tocó nada: queda como estaba y cuenta como un intento fallido. Si falla después,
+`volver_propia` → sano sobre la base anterior → `verificar`.
+
+**Tras un corte.** Un armado a medias con el servicio sobre la base de siempre es «no aplicado». Una copia a medias con el servicio corriendo lo de siempre es «no aplicado». Una copia a medias con el
 servicio detenido, o una restauración a medias, es ambiguo: no se mide cómo quedaron los datos desde afuera. El aviso
 dice la marca de la copia de ese intento.
 
@@ -146,6 +164,10 @@ Además: la ventana (o `--presente`), un servidor por día de ventana, el tope `
 
 **Resultado de una candidata.** `aplicada`; `falló; quedó como estaba` (a la segunda se escala y se avisa); o `falló y la
 vuelta atrás también` (se escala, se avisa y la ventana se frena ahí).
+
+**El aviso.** Cada incidente deja su archivo (§5) y, si la instancia definió `aviso`, se le pasa ese archivo a ese
+comando. Por dónde llega a una persona (un chat, un mail) lo decide la instancia: el canal no puede depender de lo que
+el vigía actualiza.
 
 **Incidentes que piden a una persona.** Vuelta atrás fallida; una candidata que no entró dos veces; algo a medias tras
 un corte; y un plazo vencido. Se cierran solos cuando la candidata se cierra.

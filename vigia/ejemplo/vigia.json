@@ -40,7 +40,9 @@
       "playbook": "imagen"
     },
     "docker.io/propio/bot": {
-      "base": "python:3.13-slim"
+      "base": "python:3.13-slim",
+      "nivel": "patch",
+      "playbook": "propia"
     }
   },
   "maduracion_dias": 7,
@@ -73,7 +75,8 @@
   },
   "playbooks": [
     "imagen",
-    "datos"
+    "datos",
+    "propia"
   ],
   "acciones": {
     "principal": {
@@ -109,6 +112,24 @@
         "restaurar-datos",
         "{servicio}",
         "{marca}"
+      ],
+      "construir_propia": [
+        "/usr/local/sbin/vigia-accion",
+        "construir-propia",
+        "{servicio}",
+        "{base}"
+      ],
+      "aplicar_propia": [
+        "/usr/local/sbin/vigia-accion",
+        "aplicar-propia",
+        "{servicio}",
+        "{base}"
+      ],
+      "volver_propia": [
+        "/usr/local/sbin/vigia-accion",
+        "volver-propia",
+        "{servicio}",
+        "{base}"
       ]
     }
   },

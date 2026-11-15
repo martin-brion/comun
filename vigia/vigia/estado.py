@@ -78,6 +78,8 @@ def registrar(db, servidor, piezas, ahora):
                 estado, motivo = "descartada", f"la reemplazó {medida['candidata']['propuesta']}"
             elif medida["actual"] == fila["propuesta"] or medida["estado"] == "al día":
                 estado, motivo = "cerrada", f"la pieza corre {medida['actual']}"
+            elif medida.get("base") == fila["propuesta"]:
+                estado, motivo = "cerrada", f"la pieza corre sobre la {medida['base']}"
             else:
                 continue
             db.execute("UPDATE candidatas SET estado = ?, motivo = ?, actualizada = ? WHERE id = ?",

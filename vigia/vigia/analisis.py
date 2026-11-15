@@ -10,6 +10,10 @@ from datetime import datetime, timedelta, timezone
 from . import config as _config
 from . import versiones as V
 
+BASE_NOMBRE = "org.opencontainers.image.base.name"
+BASE_HUELLA = "org.opencontainers.image.base.digest"
+_HUELLA = re.compile(r"^sha256:[0-9a-f]{64}$")
+
 
 def _fecha(texto):
     try:
@@ -77,20 +81,43 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
          "playbook": comp.get("playbook")}
     if es_propia(cfg, ref):
         r.update(propia=True, actual=ref.tag or None, estado="propia")
-        base = V.referencia(comp.get("base") or imagen.get("etiquetas", {}).get("org.opencontainers.image.base.name") or "")
+        rotulos = imagen.get("etiquetas", {})
+        # El rótulo dice sobre qué base se armó de verdad; la configuración, sobre cuál se arma. Manda el rótulo.
+        base = V.referencia(rotulos.get(BASE_NOMBRE) or comp.get("base") or "")
         if base is None or not base.tag:
             r["notas"].append("sin imagen base declarada: no se sabe si reconstruirla traería parches")
             return r
         fuente = _fuente(cfg, base, consultar)
         hecha = _fecha(imagen.get("creada"))
-        publicada = next((_fecha(e["publicada"]) for e in fuente["etiquetas"] if e["nombre"] == base.tag), None)
-        if publicada is None and fuente["estado"] == "ok" and detalle is not None:
-            publicada = _fecha((detalle(base.registro, base.repo, base.tag) or {}).get("publicada"))
+        entrada = next((e for e in fuente["etiquetas"] if e["nombre"] == base.tag), None)
+        publicada_texto = entrada["publicada"] if entrada else None
+        indice = entrada.get("indice") if entrada else None
+        if (publicada_texto is None or indice is None) and fuente["estado"] == "ok" and detalle is not None:
+            d = detalle(base.registro, base.repo, base.tag) or {}
+            publicada_texto, indice = publicada_texto or d.get("publicada"), indice or d.get("indice")
+        publicada = _fecha(publicada_texto)
+        hoy = rotulos.get(BASE_HUELLA, "")
+        if _HUELLA.match(hoy):
+            # Armada con la huella de su base en los rótulos: se sabe exactamente cuál tiene y se puede rehacer.
+            r["base"] = "base " + hoy[7:19]
+            if fuente["estado"] != "ok" or not _HUELLA.match(str(indice or "")):
+                r["notas"].append(f"base {base.repo}:{base.tag}: no se pudo saber si cambió")
+            elif indice != hoy:
+                nombre = f"{base.registro}/{base.repo}:{base.tag}"
+                r["estado"] = "base renovada"
+                r["notas"].append(f"la base {base.repo}:{base.tag} tiene una versión nueva: rehacerla trae parches")
+                c = _candidata(cfg, servidor, ref, comp, "base " + hoy[7:19], "base " + indice[7:19], "patch",
+                               publicada_texto, "base", ahora, indice, f"{nombre}@{hoy}")
+                c["referencia"] = f"{nombre}@{indice}"
+                c["nota"] = f"rehacer {ref.tag or 'latest'} igual, sobre la base nueva"
+                r["candidata"] = c
+            return r
         if fuente["estado"] != "ok" or hecha is None or publicada is None:
             r["notas"].append(f"base {base.repo}:{base.tag}: no se pudo saber si cambió")
         elif publicada > hecha:
             r["notas"].append(f"la base {base.repo}:{base.tag} se renovó el {publicada:%Y-%m-%d}, después de armar esta "
                               "imagen: reconstruirla trae parches")
+            r["notas"].append("sin la huella de su base en los rótulos: no se puede rehacer sola")
             r["estado"] = "base renovada"
         return r
     fuente = _fuente(cfg, ref, consultar)

@@ -16,10 +16,14 @@ _COMPONENTE = {"nivel", "expuesto", "linea", "base", "nota", "playbook"}
 # Los tipos de acción que el ejecutor sabe hacer, y las acciones con nombre que cada uno le pide a la instancia.
 PLAYBOOKS = {"imagen": ("respaldo_vigente", "aplicar_imagen", "verificar", "volver_imagen"),
              "datos": ("respaldo_vigente", "respaldar_datos", "aplicar_imagen", "verificar", "restaurar_datos",
-                       "volver_imagen")}
+                       "volver_imagen"),
+             # Una imagen propia que se rehace igual, sobre la versión nueva de su base: la vuelta atrás es la imagen
+             # anterior, armada sobre la base anterior, que la instancia conserva.
+             "propia": ("respaldo_vigente", "construir_propia", "aplicar_propia", "verificar", "volver_propia")}
 ACCIONES = {"respaldo_vigente": (), "aplicar_imagen": ("servicio", "referencia"), "verificar": ("servicio",),
             "volver_imagen": ("servicio", "referencia"), "respaldar_datos": ("servicio", "marca"),
-            "restaurar_datos": ("servicio", "marca")}
+            "restaurar_datos": ("servicio", "marca"), "construir_propia": ("servicio", "base"),
+            "aplicar_propia": ("servicio", "base"), "volver_propia": ("servicio", "base")}
 _HORA = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 

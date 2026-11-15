@@ -46,15 +46,25 @@ Nada en un servidor. Llama **acciones con nombre**, de una lista cerrada, que la
 | `volver_imagen` | `{servicio}`, `{referencia}` | dejarlo corriendo con la imagen anterior |
 | `respaldar_datos` | `{servicio}`, `{marca}` | detener el servicio, copiar sus datos bajo esa marca, comprobar la copia y dejarlo detenido |
 | `restaurar_datos` | `{servicio}`, `{marca}` | detenerlo, reponer exactamente esa copia y dejarlo detenido |
+| `construir_propia` | `{servicio}`, `{base}` | armar la imagen propia de ese servicio, la misma versión, sobre esa base, con la base en sus rótulos, y probarla aislada; sin tocar lo que corre y conservando la de hoy |
+| `aplicar_propia` | `{servicio}`, `{base}` | dejar el servicio corriendo con la imagen armada sobre esa base |
+| `volver_propia` | `{servicio}`, `{base}` | dejarlo corriendo con la imagen armada sobre la base anterior |
 
 La salida de una acción no se guarda: solo si salió con cero. Los valores se validan antes de armar el comando.
 
-Dos tipos de acción (`playbook`):
+Tres tipos de acción (`playbook`):
 
 - `imagen`, para un servicio cuya vuelta atrás es volver a la imagen anterior. **No sirve para una pieza que migra datos
   al actualizarse** (una base, un servidor de chat, un forge): volver a la imagen no deshace la migración.
 - `datos`, para esas piezas. Copia los datos del servicio justo antes, con una marca de ese intento. Si la versión nueva
   falla, repone esa copia y después levanta la imagen anterior. Usa las seis acciones.
+- `propia`, para una imagen que arma la instancia. Cuando su base tiene una versión nueva, la rehace igual sobre esa base,
+  la prueba aislada, la pone a correr, la verifica y, si algo falla, vuelve a la que había. Para saber qué base tiene, la
+  imagen tiene que decirlo en sus rótulos (`org.opencontainers.image.base.name` y `.base.digest`): la instancia los pone
+  al armarla.
+
+**El aviso.** Cada incidente deja un archivo y, si la instancia definió `aviso`, se lo pasa a ese comando. Una instancia
+avisa por chat y otra por mail: el vigía no sabe cuál, y el canal no puede depender de lo que el vigía actualiza.
 
 **Dos capas de respaldo.** `respaldo_vigente` mira el respaldo general (la copia de la máquina o del servidor entero): es
 la condición para empezar. La copia del tipo `datos` es la vuelta atrás de un solo servicio. El vigía no sabe qué
