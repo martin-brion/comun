@@ -193,9 +193,45 @@
     });
   }
 
+  /* Un dibujo que ya viene hecho (un mapa): no hay nada que dibujar, solo se le pone la lupa. */
+  function montarHecho(caja) {
+    var svg = caja.querySelector('svg');
+    if (!svg) return;
+    var marco = document.createElement('div');
+    marco.className = 'lupa'; marco.tabIndex = 0;
+    marco.setAttribute('role', 'group');
+    marco.setAttribute('aria-label', 'Mapa. Ctrl y rueda para ampliar, arrastrar para mover, doble clic para pantalla completa.');
+    var barra = document.createElement('div'); barra.className = 'lupa-barra';
+    var lienzo = document.createElement('div'); lienzo.className = 'lupa-lienzo';
+    var pct = document.createElement('span'); pct.className = 'lupa-pct';
+    var v = new Visor(marco, lienzo, pct);
+    boton(barra, '−', 'Alejar', function () { v.zoom(1 / PASO); });
+    barra.appendChild(pct);
+    boton(barra, '+', 'Acercar', function () { v.zoom(PASO); });
+    boton(barra, '⤢', 'Pantalla completa', function () { v.alternar(); });
+    boton(barra, '⟲', 'Volver al tamaño original', function () { v.inicio(); });
+    lienzo.appendChild(svg);
+    marco.appendChild(barra); marco.appendChild(lienzo);
+    caja.appendChild(marco);
+    v.dibujar = function () { return Promise.resolve(); };
+    v.medir(); v.inicio();
+    visores.push(v); D.dibujados += 1;
+  }
+
+  function buscarHechos() {
+    var pendientes = document.querySelectorAll('.mapa-dibujo:not([data-visor])');
+    for (var i = 0; i < pendientes.length; i++) {
+      if (!visible(pendientes[i])) continue;
+      pendientes[i].dataset.visor = 'listo'; D.vistos += 1;
+      try { montarHecho(pendientes[i]); } catch (error) { D.error = String(error).slice(0, 160); }
+    }
+  }
+
   var cola = Promise.resolve();
   function buscar() {
     D.busquedas += 1;
+    buscarHechos();
+    if (!window.mermaid) { rastro(); return; }
     var pendientes = document.querySelectorAll('pre.mermaid:not([data-visor])');
     for (var i = 0; i < pendientes.length; i++) {
       (function (pre) {
@@ -209,8 +245,11 @@
 
   function arrancar() {
     D.corrio = true;
-    if (!window.mermaid) { D.error = 'sin la libreria de diagramas'; rastro(); return; }
-    try { configurar(); } catch (error) { D.error = String(error).slice(0, 160); rastro(); return; }
+    if (window.mermaid) {
+      try { configurar(); } catch (error) { D.error = String(error).slice(0, 160); window.mermaid = null; }
+    } else if (document.querySelector('pre.mermaid')) {
+      D.error = 'sin la libreria de diagramas';
+    }
     buscar();
     document.addEventListener('toggle', function (e) {
       if (!e.target.open) return;
@@ -228,6 +267,7 @@
     if (window.matchMedia) {
       var oscuro = window.matchMedia('(prefers-color-scheme: dark)');
       var alCambiar = function () {
+        if (!window.mermaid) return;
         configurar();
         visores.forEach(function (v) { cola = cola.then(v.dibujar).catch(function () {}); });
       };

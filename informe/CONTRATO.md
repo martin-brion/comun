@@ -46,8 +46,8 @@ En todo texto vale el formato de línea: `` `código` ``, `**negrita**`, `*cursi
 |---|---|
 | `veredicto` | `columnas`: lista de `{titulo, items}`. |
 | `cifras` | `items`: lista de `{valor, texto}`. |
-| `diagrama` | `mermaid`; opcionales `titulo` y `pie`. |
-| `antes_despues` | `antes` y `despues`, cada uno `{mermaid, titulo?}`; opcional `pie`. |
+| `mapa` | El dibujo de la casa: columnas, cajas, flechas y vistas. Ver «El mapa». |
+| `diagrama` | `mermaid`; opcionales `titulo` y `pie`. Es el respaldo, para lo que no entra en un mapa. |
 | `matriz` | `columnas`: `{id, nombre, nota?}`. `filas`: `{pieza, regla?, celdas}`, con una celda `[estado, texto]` por columna. |
 | `hallazgos` | `items`: `{severidad, tema, titulo, texto, evidencia}`. |
 | `desplegable` | `titulo` y `bloques` (cualquiera, salvo `hallazgos` y otro `desplegable`). |
@@ -72,6 +72,42 @@ La cita se compara ignorando saltos de línea, espacios repetidos, los `*` y los
 una cita al empezar la línea. Lo demás tiene que coincidir. Largo: entre 12 y 600 caracteres. Si aparece más de una vez,
 se señala la primera.
 
+### El mapa
+
+Un dibujo por columnas que arma el propio componente, sin librería. La posición la da el dato: cada cosa dice en qué
+columna y en qué fila va, y por eso el mismo dato da siempre el mismo dibujo.
+
+| Clave | Qué es |
+|---|---|
+| `columnas` | De una a cinco. Cada una: `titulo`, `items` y, opcional, `fondo` (verdadero dibuja el marco de la columna). |
+| `flechas` | Opcional. Cada una: `de`, `a` (ids de cajas) y, opcionales, `texto` (hasta 18 letras) y `vistas`. |
+| `vistas` | Opcional. Lista de `{id, nombre}`. |
+| `fuera_de_vista` | `atenuar` (por defecto) u `ocultar`: qué pasa con lo que no es de la vista elegida. |
+| `titulo`, `pie` | Opcionales: una banda arriba del dibujo y la leyenda de abajo. |
+
+Un ítem de una columna es una caja o una nota, y siempre lleva `fila` (desde 1):
+
+- **Caja:** `id`, `titulo`; opcionales `texto`, `estado` (`normal`, `acento`, `aviso`, `apagado`), `vistas`, `filas`
+  (cuántas filas ocupa, hacia abajo) y `dentro`, una lista de fichas `{titulo, estado?, vistas?}` que se dibujan adentro.
+- **Nota:** `nota`, un texto suelto; opcional `vistas`.
+
+Reglas del dibujo:
+
+- Las cosas de la misma columna y la misma fila se apilan en el orden en que están escritas. Una fila mide lo que mide
+  la pila más alta: así las filas quedan alineadas entre columnas.
+- Una caja de varias filas no comparte sus filas con otra cosa de su columna.
+- Una flecha une cajas de la misma columna o de columnas vecinas. Si las dos cajas se enfrentan, va derecha; si no,
+  hace un codo en el espacio entre columnas.
+
+Vistas:
+
+- **Siempre hay una vista «Todas», va primera y es la que se ve al abrir.** No se declara.
+- Una cosa sin `vistas` está en todas. Con `vistas`, solo en esas.
+- Una ficha sin `vistas` toma las de su caja. Una flecha sin `vistas` toma las que comparten sus dos cajas.
+- Con `atenuar`, lo que no es de la vista elegida queda tenue: sirve para resaltar a quién le pertenece cada cosa. Con
+  `ocultar`, desaparece: sirve para mostrar dos estados, como «hoy» y «propuesto», sobre el mismo dibujo.
+- Sin el script de la página se ve «Todas».
+
 ## 4. El documento con el pasaje señalado
 
 El markdown se convierte con un conversor propio: títulos, párrafos, listas, tablas, citas, bloques de código, reglas y el
@@ -82,7 +118,9 @@ del documento se dibuja con el visor.
 
 ## 5. El visor de diagramas
 
-- Dibuja cada diagrama en el navegador, con los colores del sitio en claro y en oscuro.
+- Le pone la lupa a los dos tipos de dibujo: el mapa, que ya viene hecho, y el diagrama escrito como texto, que se
+  dibuja en el navegador con los colores del sitio en claro y en oscuro.
+- La librería de diagramas se pide solo en las páginas que traen un diagrama escrito como texto.
 - Tamaño inicial: entero si entra en la columna; si no, achicado hasta el 55 % y el resto se recorre arrastrando. Alto
   máximo: 70 % de la ventana.
 - Lupa: `−`, porcentaje, `+`, pantalla completa y volver al inicio. Paso de ×1,25, entre 40 % y 800 %.
@@ -90,7 +128,7 @@ del documento se dibuja con el visor.
 - Arrastre con mouse o dedo; pellizco con dos dedos; doble clic para pantalla completa.
 - Teclado, con foco en el diagrama: `+`, `-`, `0`, `f`, `Esc`.
 - Un diagrama dentro de un desplegable cerrado se dibuja al abrirlo.
-- En un diagrama de flujo se pueden usar tres clases sin definirlas: `cambia`, `nuevo` y `apagado`.
+- En un diagrama de flujo escrito como texto se pueden usar tres clases sin definirlas: `cambia`, `nuevo` y `apagado`.
 - Si la librería no cargó o un diagrama falla, queda su texto a la vista. Nunca un hueco.
 - Al imprimir: sin controles y sin recorte. La página sale en esquema claro.
 - Rastro: `window.__visor_diagramas` es una línea de texto con la versión, si corrió y cuántos diagramas vio y dibujó.
@@ -102,4 +140,7 @@ del documento se dibuja con el visor.
   claro.
 - Un comentario HTML dentro de un tramo de código en línea también se oculta.
 - El conversor de markdown no cubre notas al pie, HTML embebido ni listas de tareas.
-- El dibujo de los diagramas no tiene pruebas automáticas: se comprueba a mano (README).
+- El mapa se prueba entero, porque sale de Python. La lupa y el dibujo de los diagramas escritos como texto no tienen
+  pruebas automáticas: se comprueban a mano (README).
+- El mapa no mide el texto en un navegador: parte los renglones contando letras. Con una letra muy ancha, un renglón
+  puede pasarse de su caja.

@@ -252,7 +252,10 @@ class Armado(unittest.TestCase):
             archivos = componer(ejemplo(), RAICES, str(local))
         propias = [a for a in archivos if a.startswith("estatico/mermaid.")]
         self.assertEqual(len(propias), 1)
-        self.assertIn('src="../%s"' % propias[0], archivos["doc/casa-reglas-md.html"].decode("utf-8"))
+        self.assertIn('src="../%s"' % propias[0], archivos["doc/casa-estado-md.html"].decode("utf-8"))
+        self.assertIn('src="%s"' % propias[0], archivos["index.html"].decode("utf-8"))
+        # una página sin diagramas escritos como texto no pide la librería
+        self.assertNotIn("mermaid", archivos["doc/casa-reglas-md.html"].decode("utf-8"))
         with self.assertRaises(ErrorDatos):
             componer(ejemplo(), RAICES, "http://ejemplo.invalid/diagramas.js")
 

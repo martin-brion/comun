@@ -81,8 +81,29 @@ blockquote{margin:0;padding:6px 12px;border-left:3px solid var(--aviso);backgrou
 figure{margin:0;display:flex;flex-direction:column;gap:10px}
 figcaption{font-size:14px;color:var(--tinta-suave);max-width:80ch}
 .diagrama-titulo{font:600 13px var(--f-texto);letter-spacing:.05em;text-transform:uppercase;color:var(--tinta-suave);margin-bottom:6px}
-.antes-despues{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
-.lado{min-width:0}
+.mapa{gap:12px}
+.mapa-dibujo{min-width:0}
+.mapa-dibujo>svg{max-width:100%;height:auto;display:block}
+.mp{color:var(--tinta-suave);font-family:var(--f-texto)}
+.mp text{font-family:var(--f-texto)}
+.mp-fondo{fill:var(--hundido);stroke:var(--linea);stroke-width:1}
+.mp-caja{fill:var(--superficie);stroke:var(--linea-fuerte);stroke-width:1.2}
+.mp-titulo{font:600 13px var(--f-titulos);fill:var(--tinta)}
+.mp-columna{font:600 13px var(--f-titulos);fill:var(--tinta)}
+.mp-texto{font-size:11.5px;fill:var(--tinta-suave)}
+.mp-nota{font-size:11.5px;fill:var(--tinta-suave)}
+.mp-etiqueta{font-size:11px;fill:var(--tinta-suave)}
+.mp-etiqueta-fondo{fill:var(--fondo)}
+.mp-flecha{fill:none;stroke:var(--tinta-suave);stroke-width:1.5}
+.mp-punta{fill:var(--tinta-suave)}
+.mp-acento .mp-caja{fill:var(--acento-suave);stroke:var(--acento);stroke-width:1.6}
+.mp-aviso .mp-caja{fill:var(--aviso-suave);stroke:var(--aviso);stroke-width:1.8}
+.mp-apagado .mp-caja{fill:var(--hundido);stroke-dasharray:5 4}
+.mp-apagado .mp-titulo{fill:var(--tinta-suave)}
+.mp-ficha .mp-texto{fill:var(--tinta)}
+.mp [data-v]{transition:opacity .18s}
+.mapa[data-modo="atenuar"] .fuera{opacity:.13}
+.mapa[data-modo="ocultar"] .fuera{display:none}
 pre.mermaid{margin:0;font:400 12.5px/1.5 var(--f-mono);background:var(--superficie);border:1px dashed var(--linea-fuerte);border-radius:10px;padding:12px 14px;overflow-x:auto;color:var(--tinta-suave)}
 .lupa{position:relative;overflow:hidden;max-height:70vh;border:1px solid var(--linea);border-radius:10px;background:var(--superficie);touch-action:none;cursor:grab}
 .lupa:focus-visible{outline:2px solid var(--acento);outline-offset:2px}

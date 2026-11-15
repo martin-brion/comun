@@ -102,16 +102,107 @@ def _b_diagrama(b, donde):
     _mermaid(b, donde)
 
 
-def _b_antes_despues(b, donde):
-    _solo(b, ("tipo", "antes", "despues", "pie"), donde)
+ESTADOS_CAJA = ("normal", "acento", "aviso", "apagado")
+MODOS = ("atenuar", "ocultar")
+
+
+def _vistas_de(d, donde, vistas):
+    if "vistas" not in d:
+        return
+    lista = d["vistas"]
+    if not isinstance(lista, list) or any(v not in vistas for v in lista):
+        _fallo(donde, '"vistas" tiene que ser una lista de vistas declaradas en el mapa')
+
+
+def _estado_de(d, donde):
+    if d.get("estado", "normal") not in ESTADOS_CAJA:
+        _fallo(donde, '"estado" tiene que ser uno de: %s' % ", ".join(ESTADOS_CAJA))
+
+
+def _b_mapa(b, donde):
+    _solo(b, ("tipo", "titulo", "pie", "columnas", "flechas", "vistas", "fuera_de_vista"), donde)
+    _texto(b, "titulo", donde, opcional=True, tope=110)
     _texto(b, "pie", donde, opcional=True)
-    for lado in ("antes", "despues"):
-        dl = "%s.%s" % (donde, lado)
-        if lado not in b:
-            _fallo(donde, 'falta "%s"' % lado)
-        _solo(_objeto(b[lado], dl), ("titulo", "mermaid"), dl)
-        _texto(b[lado], "titulo", dl, opcional=True)
-        _mermaid(b[lado], dl)
+    if b.get("fuera_de_vista", "atenuar") not in MODOS:
+        _fallo(donde, '"fuera_de_vista" tiene que ser una de: %s' % ", ".join(MODOS))
+    vistas = []
+    for i, v in enumerate(b.get("vistas") or []):
+        dv = "%s.vistas[%d]" % (donde, i)
+        _solo(_objeto(v, dv), ("id", "nombre"), dv)
+        if not _ID.match(_texto(v, "id", dv)) or v["id"] == "todas":
+            _fallo(dv, '"id" inválido: minúsculas, números y guiones; «todas» ya existe siempre')
+        if v["id"] in vistas:
+            _fallo(dv, 'la vista "%s" está repetida' % v["id"])
+        vistas.append(v["id"])
+        _texto(v, "nombre", dv, tope=30)
+    if "vistas" in b and not vistas:
+        _fallo(donde, '"vistas" no puede estar vacía: si no hay vistas, se omite')
+    columnas = _lista(b, "columnas", donde)
+    if len(columnas) > 5:
+        _fallo(donde, "un mapa tiene hasta cinco columnas")
+    cajas, ocupadas, usadas = {}, set(), set()
+    for ci, c in enumerate(columnas):
+        dc = "%s.columnas[%d]" % (donde, ci)
+        _solo(_objeto(c, dc), ("titulo", "fondo", "items"), dc)
+        _texto(c, "titulo", dc, tope=40)
+        if not isinstance(c.get("fondo", False), bool):
+            _fallo(dc, '"fondo" es verdadero o falso')
+        for ii, item in enumerate(_lista(c, "items", dc)):
+            di = "%s.items[%d]" % (dc, ii)
+            _objeto(item, di)
+            fila = item.get("fila")
+            if not isinstance(fila, int) or isinstance(fila, bool) or not 1 <= fila <= 30:
+                _fallo(di, '"fila" tiene que ser un número entre 1 y 30')
+            _vistas_de(item, di, vistas)
+            if "nota" in item:
+                _solo(item, ("nota", "fila", "vistas"), di)
+                _texto(item, "nota", di, tope=300)
+                if (ci, fila) in ocupadas:
+                    _fallo(di, "una caja de varias filas no comparte sus filas con otra cosa de la misma columna")
+                usadas.add((ci, fila))
+                continue
+            _solo(item, ("id", "titulo", "texto", "estado", "vistas", "fila", "filas", "dentro"), di)
+            abarca = item.get("filas", 1)
+            if not isinstance(abarca, int) or isinstance(abarca, bool) or not 1 <= abarca <= 10:
+                _fallo(di, '"filas" tiene que ser un número entre 1 y 10')
+            for k in range(abarca):
+                if (ci, fila + k) in ocupadas or (abarca > 1 and (ci, fila + k) in usadas):
+                    _fallo(di, "una caja de varias filas no comparte sus filas con otra cosa de la misma columna")
+                if abarca > 1:
+                    ocupadas.add((ci, fila + k))
+            usadas.add((ci, fila))
+            if not _ID.match(_texto(item, "id", di)):
+                _fallo(di, '"id" inválido: minúsculas, números y guiones')
+            if item["id"] in cajas:
+                _fallo(di, 'la caja "%s" está repetida' % item["id"])
+            cajas[item["id"]] = ci
+            _texto(item, "titulo", di, tope=80)
+            _texto(item, "texto", di, opcional=True, tope=300)
+            _estado_de(item, di)
+            for fi, ficha in enumerate(item.get("dentro") or []):
+                df = "%s.dentro[%d]" % (di, fi)
+                _solo(_objeto(ficha, df), ("titulo", "estado", "vistas"), df)
+                _texto(ficha, "titulo", df, tope=40)
+                _estado_de(ficha, df)
+                _vistas_de(ficha, df, vistas)
+            if "dentro" in item and (not isinstance(item["dentro"], list) or not item["dentro"]):
+                _fallo(di, '"dentro" tiene que ser una lista con al menos una ficha')
+    if not cajas:
+        _fallo(donde, "un mapa lleva al menos una caja")
+    for fi, f in enumerate(b.get("flechas") or []):
+        df = "%s.flechas[%d]" % (donde, fi)
+        _solo(_objeto(f, df), ("de", "a", "texto", "vistas"), df)
+        for punta in ("de", "a"):
+            if f.get(punta) not in cajas:
+                _fallo(df, '"%s" tiene que nombrar una caja del mapa' % punta)
+        if f["de"] == f["a"]:
+            _fallo(df, "una flecha une dos cajas distintas")
+        if abs(cajas[f["de"]] - cajas[f["a"]]) > 1:
+            _fallo(df, "una flecha une cajas de la misma columna o de columnas vecinas: partila o reordená las columnas")
+        _texto(f, "texto", df, opcional=True, tope=18)
+        _vistas_de(f, df, vistas)
+    if "flechas" in b and not isinstance(b["flechas"], list):
+        _fallo(donde, '"flechas" tiene que ser una lista')
 
 
 def _b_matriz(b, donde):
@@ -219,7 +310,7 @@ def _b_desplegable(b, donde):
 BLOQUES = {
     "desplegable": _b_desplegable,
     "texto": _b_texto, "nota": _b_unico, "subtitulo": _b_unico, "codigo": _b_unico, "veredicto": _b_veredicto,
-    "cifras": _b_cifras, "diagrama": _b_diagrama, "antes_despues": _b_antes_despues, "matriz": _b_matriz,
+    "cifras": _b_cifras, "diagrama": _b_diagrama, "mapa": _b_mapa, "matriz": _b_matriz,
     "hallazgos": _b_hallazgos, "tarjetas": _b_tarjetas, "pasos": _b_pasos, "fases": _b_fases,
     "decisiones": _b_decisiones,
 }

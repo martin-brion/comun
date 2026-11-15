@@ -11,6 +11,7 @@ from pathlib import Path
 from . import VERSION
 from .citas import CitaInvalida, ubicar
 from .datos import ErrorDatos, validar
+from .mapa import dibujar
 from .markdown import a_html, en_linea
 
 MERMAID = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"
@@ -189,10 +190,12 @@ def _bloque(b, docs, donde, cuenta):
             '<div class="cifra"><b>%s</b><span>%s</span></div>' % (_e(c["valor"]), en_linea(c["texto"])) for c in b["items"])
     if t == "diagrama":
         return _figura(_diagrama(b["mermaid"], b.get("titulo")), b.get("pie"))
-    if t == "antes_despues":
-        lados = "".join('<div class="lado">%s</div>' % _diagrama(b[lado]["mermaid"], b[lado].get("titulo") or rotulo)
-                        for lado, rotulo in (("antes", "Antes"), ("despues", "Después")))
-        return _figura('<div class="antes-despues">%s</div>' % lados, b.get("pie"))
+    if t == "mapa":
+        cuenta[1] += 1
+        botones, dibujo = dibujar(b, cuenta[1])
+        pie = "<figcaption>%s</figcaption>" % en_linea(b["pie"]) if b.get("pie") else ""
+        return '<figure class="mapa" data-modo="%s">%s%s%s</figure>' % (b.get("fuera_de_vista", "atenuar"), botones,
+                                                                      dibujo, pie)
     if t == "matriz":
         return _matriz(b)
     if t == "desplegable":
@@ -246,13 +249,17 @@ def _tema(d):
 
 
 def _pagina(titulo, cuerpo, base, recursos, tema, mermaid):
+    # La librería de diagramas se pide solo en la página que trae un diagrama escrito como texto.
+    libreria = ""
+    if 'class="mermaid' in cuerpo:
+        libreria = "<script src=\"%s\"></script>\n" % _e(mermaid if "://" in mermaid else base + mermaid)
     return ("<!doctype html>\n<html lang=\"es\">\n<head>\n<meta charset=\"utf-8\">\n"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
             "<meta name=\"generator\" content=\"informe %s\">\n<title>%s</title>\n"
             "<link rel=\"stylesheet\" href=\"%s%s\">\n%s\n</head>\n<body>\n%s\n"
-            "<script src=\"%s\"></script>\n<script src=\"%s%s\"></script>\n<script src=\"%s%s\"></script>\n</body>\n</html>\n"
+            "%s<script src=\"%s%s\"></script>\n<script src=\"%s%s\"></script>\n</body>\n</html>\n"
             % (VERSION, _e(titulo), base, recursos["estilo.css"], tema, cuerpo,
-               _e(mermaid if "://" in mermaid else base + mermaid), base, recursos["visor.js"], base, recursos["pagina.js"]))
+               libreria, base, recursos["visor.js"], base, recursos["pagina.js"]))
 
 
 def componer(d, raices, mermaid=None):
@@ -273,7 +280,7 @@ def componer(d, raices, mermaid=None):
         raise ErrorDatos("--mermaid: una dirección tiene que ser https")
     tema = _tema(d)
 
-    cuenta, secciones, menu = [0], [], []
+    cuenta, secciones, menu = [0, 0], [], []
     for i, s in enumerate(d["secciones"]):
         cuerpo = [_bloque(b, docs, "secciones[%d].bloques[%d] (%s)" % (i, j, b["tipo"]), cuenta)
                   for j, b in enumerate(s["bloques"])]
