@@ -119,6 +119,12 @@ falla porque llama a esa función. Tras un OK diferido, la persona ve sus links 
 la confirmación genérica. Un error de Odoo o de disco no se muestra: llega un motivo fijo.
 Carga también en motores previos.
 
+0.1.0-dev.18: `gasto_anular` deshace la carga completa de un lote si sus borradores siguen
+intactos, y el lote se puede preparar de nuevo. Con el motor 0.6.31, `gasto_cargar` declara esa
+anulación como su inversa: si la instancia la lista en `directo.json`, la carga va sin tarjeta.
+La rendición, un alta de proveedor y un destino con seguimiento siguen con tarjeta. Detalle en
+`CONTRATO.md`. Carga también en motores previos.
+
 0.1.0-dev.17: el plugin es el mismo de la dev.16, archivo por archivo. Cambian dos
 pruebas. El `fields_get` de Odoo 18 ya no es la copia de una base en producción: lo
 arman los tipos de Odoo 18 que piden los contratos del plugin, sin salir de ninguna
