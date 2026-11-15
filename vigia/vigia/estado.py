@@ -45,7 +45,12 @@ def registrar(db, servidor, piezas, ahora):
     if piezas is None:
         return cambios
     with db:
-        medidas = {p["pieza"]: p for p in piezas if p["estado"] != "desconocido"}
+        # Varias imágenes pueden tener el mismo nombre de pieza (por ejemplo, una propia rehecha en un servicio y no en
+        # otro): se mira cada una, y una que no se pudo medir deja todo como está.
+        medidas, sin_medir = {}, {p["pieza"] for p in piezas if p["estado"] == "desconocido"}
+        for p in piezas:
+            if p["estado"] != "desconocido":
+                medidas.setdefault(p["pieza"], []).append(p)
         vigentes = {p["candidata"]["id"]: p["candidata"] for p in piezas if p.get("candidata")}
         for c in vigentes.values():
             fila = db.execute("SELECT estado FROM candidatas WHERE id = ?", (c["id"],)).fetchone()
@@ -69,17 +74,18 @@ def registrar(db, servidor, piezas, ahora):
         for fila in abiertas:
             if fila["id"] in vigentes:
                 continue
-            medida = medidas.get(fila["pieza"])
-            if medida is None:
+            lista = medidas.get(fila["pieza"])
+            if lista is None or fila["pieza"] in sin_medir:
                 if fila["pieza"] in corriendo:
                     continue                                   # corre, pero hoy no se pudo medir: queda como está
                 estado, motivo = "descartada", "la pieza ya no corre en el servidor"
-            elif medida.get("candidata"):
-                estado, motivo = "descartada", f"la reemplazó {medida['candidata']['propuesta']}"
-            elif medida["actual"] == fila["propuesta"] or medida["estado"] == "al día":
-                estado, motivo = "cerrada", f"la pieza corre {medida['actual']}"
-            elif medida.get("base") == fila["propuesta"]:
-                estado, motivo = "cerrada", f"la pieza corre sobre la {medida['base']}"
+            elif any(m.get("candidata") for m in lista):
+                otra = next(m for m in lista if m.get("candidata"))
+                estado, motivo = "descartada", f"la reemplazó {otra['candidata']['propuesta']}"
+            elif all(m["actual"] == fila["propuesta"] or m["estado"] == "al día" for m in lista):
+                estado, motivo = "cerrada", f"la pieza corre {lista[0]['actual']}"
+            elif all(m.get("base") == fila["propuesta"] or m.get("base_al_dia") for m in lista):
+                estado, motivo = "cerrada", f"la pieza corre sobre su base al día ({lista[0].get('base')})"
             else:
                 continue
             db.execute("UPDATE candidatas SET estado = ?, motivo = ?, actualizada = ? WHERE id = ?",

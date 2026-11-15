@@ -12,6 +12,7 @@ from . import versiones as V
 
 BASE_NOMBRE = "org.opencontainers.image.base.name"
 BASE_HUELLA = "org.opencontainers.image.base.digest"
+VERSION = "org.opencontainers.image.version"
 _HUELLA = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -82,10 +83,24 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
     if es_propia(cfg, ref):
         r.update(propia=True, actual=ref.tag or None, estado="propia")
         rotulos = imagen.get("etiquetas", {})
-        # El rótulo dice sobre qué base se armó de verdad; la configuración, sobre cuál se arma. Manda el rótulo.
-        base = V.referencia(rotulos.get(BASE_NOMBRE) or comp.get("base") or "")
-        if base is None or not base.tag:
+        # El rótulo dice sobre qué base se armó; la configuración, cuál aprobó el dueño. Si los dos la nombran, tienen que
+        # coincidir: la foto es de otra máquina y no puede elegir de qué repositorio se arma una imagen.
+        declarada = V.referencia(comp.get("base") or "")
+        rotulada = V.referencia(rotulos.get(BASE_NOMBRE) or "")
+        rotulada = rotulada if rotulada is not None and rotulada.tag else None
+        declarada = declarada if declarada is not None and declarada.tag else None
+        if declarada and rotulada and (rotulada.registro, rotulada.repo, rotulada.tag) != (
+                declarada.registro, declarada.repo, declarada.tag):
+            r["notas"].append(f"sus rótulos nombran otra base ({rotulada.repo}:{rotulada.tag}) que la declarada "
+                              f"({declarada.repo}:{declarada.tag}): no se propone rehacerla")
+            return r
+        base = rotulada or declarada
+        if base is None:
             r["notas"].append("sin imagen base declarada: no se sabe si reconstruirla traería parches")
+            return r
+        if es_propia(cfg, base):
+            # Regla 4: un nombre propio no sale, tampoco como base de otra imagen.
+            r["notas"].append("su base es otra imagen propia: no se consulta afuera ni se rehace sola")
             return r
         fuente = _fuente(cfg, base, consultar)
         hecha = _fecha(imagen.get("creada"))
@@ -101,8 +116,11 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
             # Armada con la huella de su base en los rótulos: se sabe exactamente cuál tiene y se puede rehacer.
             r["base"] = "base " + hoy[7:19]
             if fuente["estado"] != "ok" or not _HUELLA.match(str(indice or "")):
-                r["notas"].append(f"base {base.repo}:{base.tag}: no se pudo saber si cambió")
-            elif indice != hoy:
+                # Desconocido, no «propia»: con la fuente caída no se puede decir que su base está al día.
+                r.update(estado="desconocido", motivo=f"base {base.repo}:{base.tag}: no se pudo saber si cambió")
+            elif indice == hoy:
+                r["base_al_dia"] = True
+            else:
                 nombre = f"{base.registro}/{base.repo}:{base.tag}"
                 r["estado"] = "base renovada"
                 r["notas"].append(f"la base {base.repo}:{base.tag} tiene una versión nueva: rehacerla trae parches")
@@ -110,6 +128,8 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
                                publicada_texto, "base", ahora, indice, f"{nombre}@{hoy}")
                 c["referencia"] = f"{nombre}@{indice}"
                 c["nota"] = f"rehacer {ref.tag or 'latest'} igual, sobre la base nueva"
+                # La versión que corre: al rehacerla y al volver atrás se mide también, no solo la base.
+                c["version"] = rotulos.get(VERSION) or None
                 r["candidata"] = c
             return r
         if fuente["estado"] != "ok" or hecha is None or publicada is None:

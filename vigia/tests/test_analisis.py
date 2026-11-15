@@ -212,8 +212,45 @@ class Propias(Base):
 
     def test_sin_poder_consultar_la_base_no_es_al_dia(self):
         p = self.rotulada(H, Red())
-        self.assertEqual((p["candidata"], p["estado"]), (None, "propia"))
-        self.assertTrue(any("no se pudo saber" in n for n in p["notas"]))
+        self.assertEqual((p["candidata"], p["estado"]), (None, "desconocido"))
+        self.assertIn("no se pudo saber", p["motivo"])
+
+    def test_si_los_rotulos_nombran_otra_base_que_la_declarada_no_propone(self):
+        cfg = config.validar(datos.config(self.tmp.name, componentes={
+            "docker.io/propio/bot": {"base": "python:3.13-slim", "nivel": "patch", "playbook": "propia"}}))
+        rotulos = {"org.opencontainers.image.base.name": "docker.io/otro/python:3.13-slim",
+                   "org.opencontainers.image.base.digest": H}
+        red = Red().hub("otro/python", [tag("3.13-slim", VIEJA, H2)])
+        p = self.una([("bot", "propio/bot:0.6.30", 1)], red, cfg=cfg, imagenes={1: {"etiquetas": rotulos}})
+        self.assertIsNone(p["candidata"])
+        self.assertTrue(any("otra base" in n for n in p["notas"]))
+        self.assertEqual(red.pedidos, [])
+
+    def test_un_rotulo_sin_etiqueta_usa_la_base_declarada(self):
+        cfg = config.validar(datos.config(self.tmp.name, componentes={
+            "docker.io/propio/bot": {"base": "python:3.13-slim", "nivel": "patch", "playbook": "propia"}}))
+        rotulos = {"org.opencontainers.image.base.name": "python@" + H, "org.opencontainers.image.base.digest": H}
+        p = self.una([("bot", "propio/bot:0.6.30", 1)], Red().hub("library/python", [tag("3.13-slim", VIEJA, H2)]),
+                     cfg=cfg, imagenes={1: {"etiquetas": rotulos}})
+        self.assertEqual(p["candidata"]["referencia"], f"docker.io/library/python:3.13-slim@{H2}")
+
+    def test_una_base_propia_no_se_consulta_afuera(self):
+        cfg = config.validar(datos.config(self.tmp.name, componentes={"docker.io/propio/bot": {"nivel": "patch"}}))
+        rotulos = {"org.opencontainers.image.base.name": "docker.io/propio/base-python:1",
+                   "org.opencontainers.image.base.digest": H}
+        red = Red()
+        p = self.una([("bot", "propio/bot:0.6.30", 1)], red, cfg=cfg, imagenes={1: {"etiquetas": rotulos}})
+        self.assertEqual((red.pedidos, p["candidata"]), ([], None))
+        self.assertTrue(any("otra imagen propia" in n for n in p["notas"]))
+
+    def test_la_version_que_corre_viaja_en_la_candidata(self):
+        cfg = config.validar(datos.config(self.tmp.name, componentes={
+            "docker.io/propio/bot": {"base": "python:3.13-slim", "nivel": "patch", "playbook": "propia"}}))
+        rotulos = {"org.opencontainers.image.base.name": "docker.io/library/python:3.13-slim",
+                   "org.opencontainers.image.base.digest": H, "org.opencontainers.image.version": "0.6.30"}
+        p = self.una([("bot", "propio/bot:0.6.30", 1)], Red().hub("library/python", [tag("3.13-slim", VIEJA, H2)]),
+                     cfg=cfg, imagenes={1: {"etiquetas": rotulos}})
+        self.assertEqual(p["candidata"]["version"], "0.6.30")
 
     def test_sin_huella_en_los_rotulos_no_propone_rehacerla_sola(self):
         cfg = config.validar(datos.config(self.tmp.name, componentes={

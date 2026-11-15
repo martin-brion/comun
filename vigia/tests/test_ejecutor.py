@@ -570,6 +570,8 @@ class ServidorPropio:
         self.falla_verificar = set()                # no verifica sobre una base distinta de la original
         self.falla_volver = set()
         self.corte = None                           # (orden, servicio): muere en esa acción, antes del efecto
+        self.versiones = {}                         # servicio -> versión con que corre, si no es la de siempre
+        self.version_al_volver = None               # volver_propia levanta otra versión armada sobre esa base
 
     def tomar(self, servidor, ahora, vigencia):
         contenedores, imagenes = [], {}
@@ -578,7 +580,8 @@ class ServidorPropio:
             contenedores.append((nombre, "propio/bot:0.6.30", numero))
             imagenes[numero] = {"creada": "2026-12-20T00:00:00Z", "tags": ["propio/bot:0.6.30"],
                                 "etiquetas": {"org.opencontainers.image.base.name": BASE,
-                                              "org.opencontainers.image.base.digest": huella}}
+                                              "org.opencontainers.image.base.digest": huella,
+                                              "org.opencontainers.image.version": self.versiones.get(nombre, "0.6.30")}}
         cruda = datos.foto(contenedores, imagenes)
         cruda["tomada"] = ahora
         return {"nombre": servidor["nombre"], "estado": "ok", "motivo": "", "foto": censo.limpiar(cruda, ahora, vigencia)}
@@ -602,6 +605,8 @@ class ServidorPropio:
             if huella not in self.armadas or (orden == "volver-propia" and servicio in self.falla_volver):
                 return 1
             self.servicios[servicio] = huella
+            if orden == "volver-propia" and self.version_al_volver:
+                self.versiones[servicio] = self.version_al_volver
             return 0
         if orden == "verificar":
             nueva = self.servicios[resto[0]] != self.originales[resto[0]]
@@ -715,9 +720,67 @@ class Propias(Base):
         self.assertEqual(self.candidata("base " + H2[7:19])["estado"], "cerrada")
 
     def test_la_base_se_valida_antes_de_armar_el_comando(self):
-        self.assertFalse(ejecutor.accion(self.cfg, "principal", "construir_propia",
-                                         {"servicio": "bot", "base": "python:3.13-slim; rm -rf /"}, self.s.correr))
+        for mala in ("python:3.13-slim; rm -rf /", "python:3.13-slim", "-x@" + H2):
+            self.assertFalse(ejecutor.accion(self.cfg, "principal", "construir_propia",
+                                             {"servicio": "bot", "base": mala}, self.s.correr))
         self.assertEqual(self.s.llamadas, [])
+
+    def test_una_pieza_propia_con_otro_tipo_de_accion_no_se_toca(self):
+        cfg = self.config(componentes={BOT: {"base": "python:3.13-slim", "nivel": "patch", "playbook": "imagen"}},
+                          acciones={"principal": dict(ACCIONES, **CON_PROPIAS)}, playbooks=["imagen", "propia"])
+        (paso,) = self.aplicar(presente=True, cfg=cfg)["pasos"]
+        self.assertEqual([n for n, ok, _ in paso["compuertas"] if not ok], ["tipo de acción"])
+        self.assertEqual(self.s.llamadas, [])
+
+    def test_si_falla_en_el_segundo_servicio_el_primero_vuelve(self):
+        self.s = ServidorPropio({"bot-a": H, "bot-b": H})
+        self.s.falla_verificar = {"bot-b"}
+        acta = self.aplicar(presente=True)
+        self.assertEqual(acta["pasos"][0]["resultado"], "falló; quedó como estaba")
+        self.assertEqual(self.s.servicios, {"bot-a": H, "bot-b": H})
+        self.assertEqual(self.ordenes()[-3:], ["verificar", "volver-propia", "verificar"])
+
+    def test_si_vuelve_a_otra_version_sobre_la_misma_base_no_cuenta_como_vuelta(self):
+        self.s.falla_verificar = {"bot"}
+        self.s.version_al_volver = "0.6.29"
+        acta = self.aplicar(presente=True)
+        self.assertEqual(acta["pasos"][0]["resultado"], "falló y la vuelta atrás también")
+
+    def test_dos_imagenes_de_la_misma_pieza_se_intentan_una_vez_por_pasada(self):
+        self.s = ServidorPropio({"bot-a": H, "bot-b": H3})
+        self.s.versiones = {"bot-b": "0.6.30"}
+        self.s.falla_construir = {"bot-a", "bot-b"}
+        self.red = Red().hub("library/python", [tag("3.13-slim", VIEJA, H4)])
+        acta = self.aplicar(presente=True)
+        self.assertEqual(self.ordenes().count("construir"), 1)
+        self.assertIn("una vez por pasada", [n for p in acta["pasos"] for n, ok, _ in p["compuertas"] if not ok])
+
+    def test_el_aviso_de_dos_armados_fallidos_no_dice_que_volvio(self):
+        self.s.falla_construir = {"bot"}
+        self.aplicar(presente=True)
+        self.ahora = AHORA + 7 * DIA
+        self.aplicar(presente=True)
+        (i,) = estado.incidentes(self.db())
+        self.assertIn("no se pudo armar", i["texto"])
+        self.assertNotIn("volvió atrás", i["texto"])
+
+    def test_una_candidata_vieja_se_cierra_cuando_la_base_ya_esta_al_dia(self):
+        self.cfg = self.config(componentes={BOT: {"base": "python:3.13-slim", "nivel": "nunca", "playbook": "propia"}},
+                               acciones={"principal": CON_PROPIAS}, playbooks=["propia"])
+        corrida.correr(self.cfg, AHORA, tomar=self.s.tomar, pedir=self.red, escanear=lambda *a: {})
+        self.assertEqual(self.candidata("base " + H2[7:19])["estado"], "detectada")
+        self.s.servicios["bot"] = H3                        # alguien la rehízo a mano sobre una base más nueva aún
+        red = Red().hub("library/python", [tag("3.13-slim", VIEJA, H3)])
+        corrida.correr(self.cfg, AHORA + 60, tomar=self.s.tomar, pedir=red, escanear=lambda *a: {})
+        self.assertEqual(self.candidata("base " + H2[7:19])["estado"], "cerrada")
+
+    def test_con_la_fuente_caida_no_se_cierra_por_una_sola_imagen(self):
+        self.s = ServidorPropio({"bot-a": H2, "bot-b": H})
+        self.s.versiones = {"bot-b": "0.6.30"}
+        corrida.correr(self.cfg, AHORA, tomar=self.s.tomar, pedir=self.red, escanear=lambda *a: {})
+        self.assertEqual(self.candidata("base " + H2[7:19])["estado"], "detectada")
+        corrida.correr(self.cfg, AHORA + 60, tomar=self.s.tomar, pedir=Red(), escanear=lambda *a: {})
+        self.assertEqual(self.candidata("base " + H2[7:19])["estado"], "detectada")
 
 
 if __name__ == "__main__":

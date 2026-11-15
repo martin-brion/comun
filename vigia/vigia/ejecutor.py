@@ -22,6 +22,7 @@ _FIJA = re.compile(r"^[a-z0-9][A-Za-z0-9._/:-]{0,299}@(sha256:[0-9a-f]{64})$")
 _MARCA = re.compile(r"^m[0-9]{9,12}$")
 _PATRON = {"servicio": _SERVICIO, "referencia": _FIJA, "marca": _MARCA, "base": _FIJA}
 _BASE = "org.opencontainers.image.base.digest"
+_VERSION = "org.opencontainers.image.version"
 MAX_FALLAS = 2
 TOPE_ARMADO = 3600                 # armar una imagen entera puede llevar más que los 15 minutos de las demás acciones
 PASO_S = 10
@@ -68,8 +69,12 @@ def compuertas(cfg, db, servidor, pieza, presente, correr):
     g = [("versión", c["compuerta_version"] == "pasaría", c["compuerta_version"])]
     playbook = pieza.get("playbook")
     habilitado = playbook in cfg["playbooks"]
-    g.append(("tipo de acción", habilitado, playbook if habilitado else "la pieza no tiene un tipo de acción habilitado"))
-    if not habilitado:
+    # Una propia solo con `propia`, y `propia` solo con una propia: si no, se pondría a correr la imagen base sola.
+    corresponde = (playbook == "propia") == bool(pieza.get("propia"))
+    g.append(("tipo de acción", habilitado and corresponde, playbook if habilitado and corresponde else (
+        "la pieza no tiene un tipo de acción habilitado" if not habilitado else
+        f"el tipo «{playbook}» no corresponde a una pieza {'propia' if pieza.get('propia') else 'pública'}")))
+    if not (habilitado and corresponde):
         return g
     faltan = [a for a in _config.PLAYBOOKS[playbook] if a not in cfg["acciones"].get(servidor, {})]
     g.append(("acciones", not faltan, "definidas" if not faltan else "faltan: " + ", ".join(faltan)))
@@ -102,9 +107,16 @@ def _base(foto, contenedor):
     return {huella} if huella else set()
 
 
-def _medida(playbook):
-    """Qué se compara para saber con qué corre un servicio: la imagen o, en una propia, la base de su imagen."""
-    return _base if playbook == "propia" else _huella
+def _medida(playbook, version=None):
+    """Qué se compara para saber con qué corre un servicio: la imagen o, en una propia, la base de su imagen, y solo si
+    además es la misma versión (una vuelta atrás a otra versión armada sobre la misma base no cuenta)."""
+    if playbook != "propia":
+        return _huella
+
+    def medir(foto, contenedor):
+        rotulos = foto["imagenes"].get(contenedor["imagen_id"], {}).get("etiquetas", {})
+        return _base(foto, contenedor) if version is None or rotulos.get(_VERSION) == version else set()
+    return medir
 
 
 def _mide(cfg, servidor, servicio, tomar, reloj):
@@ -134,14 +146,14 @@ def _volver(cfg, db, servidor, c, servicio, tomar, correr, reloj, dormir, playbo
     nombre = servidor["nombre"]
     datos = {"servicio": servicio, "a": c["anterior"]}
     if playbook == "propia":
-        datos["tipo"] = playbook
+        datos.update(tipo=playbook, version=c.get("version"))
     m = estado.intencion(db, c["id"], nombre, "volver", datos, int(reloj()))
     if playbook == "propia":
         vuelta = accion(cfg, nombre, "volver_propia", {"servicio": servicio, "base": c["anterior"]}, correr) is True
     else:
         vuelta = accion(cfg, nombre, "volver_imagen", {"servicio": servicio, "referencia": c["anterior"]}, correr) is True
     vuelta = vuelta and _sano(cfg, servidor, servicio, _FIJA.match(c["anterior"]).group(1), tomar, reloj, dormir,
-                              _medida(playbook))
+                              _medida(playbook, c.get("version")))
     vuelta = vuelta and accion(cfg, nombre, "verificar", {"servicio": servicio}, correr) is True
     estado.resultado(db, m, "hecho" if vuelta else "fallo", "", int(reloj()))
     return "vuelto" if vuelta else "roto"
@@ -157,8 +169,8 @@ def _aplicar_servicio(cfg, db, servidor, c, servicio, playbook, tomar, correr, r
     if playbook == "propia":
         # Se arma y se prueba aislada antes de tocar lo que corre. Si no se arma, nada cambió: no hay vuelta atrás que hacer.
         n = estado.intencion(db, c["id"], nombre, "construir",
-                             {"servicio": servicio, "de": c["anterior"], "a": c["referencia"], "tipo": playbook},
-                             int(reloj()))
+                             {"servicio": servicio, "de": c["anterior"], "a": c["referencia"], "tipo": playbook,
+                              "version": c.get("version")}, int(reloj()))
         armada = accion(cfg, nombre, "construir_propia", {"servicio": servicio, "base": c["referencia"]}, correr,
                         TOPE_ARMADO) is True
         estado.resultado(db, n, "hecho" if armada else "fallo",
@@ -178,7 +190,7 @@ def _aplicar_servicio(cfg, db, servidor, c, servicio, playbook, tomar, correr, r
             return _volver(cfg, db, servidor, c, servicio, tomar, correr, reloj, dormir, playbook)
     intento = {"servicio": servicio, "de": c["anterior"], "a": c["referencia"]}
     if playbook == "propia":
-        intento["tipo"] = playbook
+        intento.update(tipo=playbook, version=c.get("version"))
     if marca:
         intento["marca"] = marca
     n = estado.intencion(db, c["id"], nombre, "aplicar", intento, int(reloj()))
@@ -186,7 +198,7 @@ def _aplicar_servicio(cfg, db, servidor, c, servicio, playbook, tomar, correr, r
         bien = accion(cfg, nombre, "aplicar_propia", {"servicio": servicio, "base": c["referencia"]}, correr) is True
     else:
         bien = accion(cfg, nombre, "aplicar_imagen", {"servicio": servicio, "referencia": c["referencia"]}, correr) is True
-    bien = bien and _sano(cfg, servidor, servicio, c["indice"], tomar, reloj, dormir, _medida(playbook))
+    bien = bien and _sano(cfg, servidor, servicio, c["indice"], tomar, reloj, dormir, _medida(playbook, c.get("version")))
     bien = bien and accion(cfg, nombre, "verificar", {"servicio": servicio}, correr) is True
     if bien:
         estado.resultado(db, n, "hecho", "", int(reloj()))
@@ -210,7 +222,8 @@ def recuperar(cfg, db, tomar, reloj):
         ahora = int(reloj())
         servidor = por_nombre.get(e["servidor"])
         foto, suyos = _mide(cfg, servidor, e["datos"]["servicio"], tomar, reloj) if servidor else (None, None)
-        huellas = [_medida(e["datos"].get("tipo"))(foto, c) for c in suyos] if suyos else []
+        medir = _medida(e["datos"].get("tipo"), e["datos"].get("version"))
+        huellas = [medir(foto, c) for c in suyos] if suyos else []
 
         def todos(clave):
             fija = _FIJA.match(e["datos"].get(clave) or "")
@@ -288,10 +301,16 @@ def aplicar(cfg, presente=False, tomar=censo.tomar, pedir=fuentes.pedir, escanea
         estado.tomar_ventana(db, fecha, servidor["nombre"])
         candidatas = sorted((p for p in medido["piezas"] if p.get("candidata")),
                             key=lambda p: (p["candidata"]["plazo"]["vence"], p["pieza"]))
+        vistas = set()
         for pieza in candidatas:
             c = pieza["candidata"]
             paso = {"pieza": pieza["pieza"], "de": c["actual"], "a": c["propuesta"], "resultado": "bloqueada"}
             acta["pasos"].append(paso)
+            if c["id"] in vistas:
+                # La misma candidata en dos imágenes de la misma pieza: se intenta una vez por pasada.
+                paso["compuertas"] = [("una vez por pasada", False, "ya se intentó en esta pasada")]
+                continue
+            vistas.add(c["id"])
             if estado.ventana(db, fecha)["aplicadas"] >= cfg["max_por_ventana"]:
                 paso["compuertas"] = [("tope de la ventana", False, f"ya se aplicaron {cfg['max_por_ventana']}")]
                 continue
@@ -299,12 +318,21 @@ def aplicar(cfg, presente=False, tomar=censo.tomar, pedir=fuentes.pedir, escanea
             if not all(ok for _, ok, _ in paso["compuertas"]):
                 continue
             estado.pasar(db, c["id"], "aplicando", "", int(reloj()))
-            resultado = "hecho"
+            resultado, hechos = "hecho", []
             for servicio in _servicios(pieza):
                 resultado = _aplicar_servicio(cfg, db, servidor, c, servicio, pieza["playbook"], tomar, correr, reloj,
                                               dormir)
                 if resultado != "hecho":
                     break
+                hechos.append(servicio)
+            if resultado == "vuelto" and hechos:
+                # Los servicios que ya habían cambiado vuelven también: «quedó como estaba» tiene que ser cierto para todos.
+                # Con `datos` no: volver la imagen sobre datos ya migrados los rompería; eso lo ve una persona.
+                if pieza["playbook"] == "datos":
+                    resultado = "a medias"
+                for servicio in reversed(hechos if resultado == "vuelto" else []):
+                    if _volver(cfg, db, servidor, c, servicio, tomar, correr, reloj, dormir, pieza["playbook"]) != "vuelto":
+                        resultado = "roto"
             ahora = int(reloj())
             if resultado == "hecho":
                 paso["resultado"] = "aplicada"
@@ -319,11 +347,24 @@ def aplicar(cfg, presente=False, tomar=censo.tomar, pedir=fuentes.pedir, escanea
                 paso["resultado"] = "falló; quedó como estaba"
                 if fallas >= MAX_FALLAS:
                     estado.pasar(db, c["id"], "escalada", f"no entró en {fallas} intentos", ahora)
+                    armado = all(e["paso"] == "construir" for e in estado.diario(db)
+                                 if e["candidata"] == c["id"] and e["resultado"] == "fallo")
+                    como = ("no se pudo armar o no pasó su prueba aislada; no se tocó lo que corre" if armado else
+                            "se volvió atrás bien cada vez")
                     estado.incidente(db, f"fallo-{c['id']}", "no entró",
                                      f"En {servidor['nombre']}, {pieza['pieza']} {c['actual']} → {c['propuesta']} falló "
-                                     f"{fallas} veces. Se volvió atrás bien las dos; no se intenta más sola.", ahora)
+                                     f"{fallas} veces: {como}. No se intenta más sola.", ahora)
                 else:
                     estado.pasar(db, c["id"], "esperando", "un intento falló y se volvió atrás", ahora)
+            elif resultado == "a medias":
+                paso["resultado"] = "falló a medias"
+                estado.pasar(db, c["id"], "escalada", "falló en un servicio después de cambiar otro", ahora)
+                estado.incidente(db, f"roto-{c['id']}", "a medias",
+                                 f"En {servidor['nombre']}, {pieza['pieza']} {c['actual']} → {c['propuesta']} cambió en "
+                                 f"{', '.join(hechos)} y falló en el siguiente, que quedó como estaba. Con datos no se vuelve "
+                                 "atrás a ciegas: revisarlo. El vigía frenó la ventana.", ahora)
+                acta["motivo"] = "se frenó la ventana: una pieza quedó a medias"
+                break
             else:
                 paso["resultado"] = "falló y la vuelta atrás también"
                 estado.pasar(db, c["id"], "escalada", "falló y la vuelta atrás también", ahora)

@@ -62,8 +62,11 @@ misma cantidad de números; las preliminares no cuentan). Los pasos más grandes
 con nombre y huella (`org.opencontainers.image.base.name` y `org.opencontainers.image.base.digest`), y esa etiqueta de la
 base apunta hoy a otra huella, la candidata es rehacer la misma imagen sobre la base nueva: `salto` `patch`, `actual` y
 `propuesta` dicen `base <12 primeros de la huella>`, `referencia` es la base nueva con huella y `anterior`, la base de hoy
-con huella. La pieza propia informa `base` con la que corre, y la candidata se cierra cuando corre sobre la nueva. Sin la
-huella en los rótulos solo se avisa que la base se renovó, por fecha: no se propone rehacerla.
+con huella; `version`, el rótulo `org.opencontainers.image.version` de la imagen que corre. La pieza propia informa
+`base` con la que corre, y la candidata se cierra cuando todas las imágenes con ese nombre corren sobre la nueva o sobre
+su base al día. Sin la huella en los rótulos solo se avisa que la base se renovó, por fecha: no se propone rehacerla.
+Si la configuración declara una `base` y los rótulos nombran otra, no se propone nada: lo aprobado es lo declarado. Una
+base que es otra imagen propia no se consulta afuera. Con la fuente de la base caída, la pieza queda «desconocido».
 
 ```
 {"id", "servidor", "pieza", "actual", "propuesta", "salto": "patch" | "minor" | "mayor", "publicada", "madura",
@@ -110,7 +113,8 @@ Códigos de salida de `python -m vigia`: 0 bien, 1 sin corrida previa, 2 configu
 - `propia`: rehace una imagen propia, igual, sobre la versión nueva de su base (§3). Primero `construir_propia` la arma y la
   prueba aislada, sin tocar lo que corre; recién después `aplicar_propia` la pone a correr. Lo que se mide es la huella de
   la base en los rótulos de la imagen con que corre el servicio. Su vuelta atrás es la imagen armada sobre la base
-  anterior, que la instancia conserva: `volver_propia`. Como no cambia el código, no migra datos.
+  anterior, que la instancia conserva: `volver_propia`. Como no cambia el código, no migra datos. Solo vale para una pieza
+  propia, y una pieza propia solo admite este tipo: con otro se pondría a correr la imagen base sola.
 
 El respaldo es de la instancia. El vigía pide por nombre (¿hay uno vigente?, copiá esto, reponé esto) y no sabe qué
 sistema responde: cambiar de servicio de respaldo es cambiar los comandos de `acciones`.
@@ -140,7 +144,8 @@ servicio detenido y justo antes. Retirar copias viejas es de la instancia, y nun
 copia falla, no aplica: `volver_imagen` levanta lo que había. Si falla después, `restaurar_datos` → `volver_imagen` →
 sano → `verificar`. Si la restauración falla, no levanta la imagen anterior: escala y frena la ventana.
 
-**Orden de un intento con `propia`.** `construir_propia` → `aplicar_propia` → sano y sobre la base pedida → `verificar`.
+**Orden de un intento con `propia`.** `construir_propia` → `aplicar_propia` → sano, sobre la base pedida y en la misma
+versión → `verificar`. La instancia pone en el rótulo de la base exactamente la huella que recibió en `{base}`.
 Si el armado falla, no se tocó nada: queda como estaba y cuenta como un intento fallido. Si falla después,
 `volver_propia` → sano sobre la base anterior → `verificar`.
 
@@ -161,6 +166,9 @@ dice la marca de la copia de ese intento.
 9. Respaldo: `respaldo_vigente` salió con cero. Va última porque es la única que corre un comando.
 
 Además: la ventana (o `--presente`), un servidor por día de ventana, el tope `max_por_ventana` y el archivo `PAUSA`.
+
+**Varios servicios con la misma imagen.** Se aplican de a uno. Si uno falla y quedó como estaba, los que ya habían
+cambiado vuelven también; con `datos` eso no se hace a ciegas: se escala. Una candidata se intenta una sola vez por pasada.
 
 **Resultado de una candidata.** `aplicada`; `falló; quedó como estaba` (a la segunda se escala y se avisa); o `falló y la
 vuelta atrás también` (se escala, se avisa y la ventana se frena ahí).
