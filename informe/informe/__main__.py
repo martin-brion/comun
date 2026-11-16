@@ -1,4 +1,7 @@
-"""python -m informe armar|validar <datos.json> [--salida carpeta] [--raiz nombre=carpeta] [--mermaid archivo|url]"""
+"""python -m informe armar|validar <datos.json> [--salida carpeta] [--raiz nombre=carpeta] [--mermaid archivo|url]
+
+python -m informe atlas validar|armar|pendientes|incorporar ...: el atlas de una base (CONTRATO.md, «El atlas»).
+"""
 import argparse
 import json
 import re
@@ -23,6 +26,10 @@ def main(argumentos=None):
     for flujo in (sys.stdout, sys.stderr):
         if hasattr(flujo, "reconfigure"):
             flujo.reconfigure(errors="replace")
+    argumentos = sys.argv[1:] if argumentos is None else list(argumentos)
+    if argumentos[:1] == ["atlas"]:
+        from .atlas import principal
+        return principal(argumentos[1:])
     p = argparse.ArgumentParser(prog="informe", description="Arma un informe navegable desde un archivo de datos.")
     p.add_argument("accion", choices=("armar", "validar"))
     p.add_argument("datos", help="archivo JSON con el informe")

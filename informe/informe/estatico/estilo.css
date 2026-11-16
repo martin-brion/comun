@@ -145,6 +145,31 @@ tr.resaltado td:first-child,tr.resaltado th:first-child{box-shadow:inset 4px 0 0
 .resaltado.destino,.lupa.destino{outline:2px solid var(--aviso);outline-offset:3px}
 .lupa.resaltado{box-shadow:0 0 0 3px var(--marca)}
 .ancla{display:inline-block;width:0;height:0;scroll-margin-top:90px}
+/* Atlas: camino de vuelta, casilleros sin definir, piezas con su vigente y sus antecedentes, vínculos del mapa. */
+.camino{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:14px;padding:4px 0 10px;color:var(--tinta-suave)}
+.camino a{text-decoration:none;font-weight:500}
+.camino a:hover,.camino a:focus-visible{text-decoration:underline}
+.camino .sep{color:var(--linea-fuerte)}
+.camino [aria-current]{color:var(--tinta)}
+.nivel section{padding-top:32px}
+.sin-definir{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;font-size:14px;max-width:none}
+.pildora.sin{color:var(--tinta-suave);background:var(--hundido);border:1px dashed var(--linea-fuerte)}
+.pildora.vig{color:var(--acento);background:var(--acento-suave)}
+.aviso-version{border-left:3px solid var(--aviso);background:var(--aviso-suave);padding:8px 12px;border-radius:0 6px 6px 0;font-size:14.5px;max-width:none}
+.piezas{display:flex;flex-direction:column;gap:12px}
+.pieza{background:var(--superficie);border:1px solid var(--linea);border-radius:10px;padding:14px 18px;display:flex;flex-direction:column;gap:8px;scroll-margin-top:24px;min-width:0}
+.pieza:target{outline:2px solid var(--acento);outline-offset:2px}
+.antecedentes ol{margin:8px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:4px}
+.docs{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:10px}
+.docs p{font-size:14.5px;margin-top:2px}
+.indice-atlas ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.indice-atlas ul ul{margin-top:4px;gap:2px;font-size:14.5px}
+.tarjeta h3 a{text-decoration:none}
+.seccion-doc{margin-top:0}
+.tarjeta h3 a:hover,.tarjeta h3 a:focus-visible{text-decoration:underline}
+.mp-vinculo{cursor:pointer}
+.mp-vinculo:focus{outline:none}
+.mp-vinculo:hover .mp-caja,.mp-vinculo:focus-visible .mp-caja{stroke:var(--acento);stroke-width:2.2}
 @media (prefers-reduced-motion:reduce){ html{scroll-behavior:auto} .lupa-barra{transition:none} }
 @media print{
   :root{--fondo:#FFFFFF;--superficie:#FFFFFF;--hundido:#F1F3F5;--tinta:#111111;--tinta-suave:#444444;--linea:#BBBBBB;--linea-fuerte:#888888;--marca:#FFF3B8;color-scheme:light}

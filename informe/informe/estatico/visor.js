@@ -3,7 +3,7 @@
 (function () {
   'use strict';
   var PASO = 1.25, MINIMO = 0.4, MAXIMO = 8;
-  var D = { version: '0.1.0', corrio: false, busquedas: 0, vistos: 0, dibujados: 0, error: '' };
+  var D = { version: '0.2.0', corrio: false, busquedas: 0, vistos: 0, dibujados: 0, error: '' };
   var serie = 0, visores = [];
 
   function rastro() {
@@ -102,13 +102,19 @@
     marco.addEventListener('pointerdown', function (e) {
       if (e.target.closest('.lupa-barra')) return;
       marco.focus({ preventScroll: true });
-      yo.punteros[e.pointerId] = { x: e.clientX, y: e.clientY };
-      try { marco.setPointerCapture(e.pointerId); } catch (error) { /* sin captura, sigue igual */ }
+      /* La captura espera a que el puntero se mueva: así un clic sobre una caja con vínculo sigue siendo un clic. */
+      yo.punteros[e.pointerId] = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, capturado: false };
+      yo.arrastro = false;
       marco.classList.add('arrastrando');
     });
     marco.addEventListener('pointermove', function (e) {
       var p = yo.punteros[e.pointerId];
       if (!p) return;
+      if (e.pointerType === 'mouse' && !e.buttons) { soltar(e); return; }
+      if (!p.capturado && Math.hypot(e.clientX - p.x0, e.clientY - p.y0) > 4) {
+        p.capturado = true; yo.arrastro = true;
+        try { marco.setPointerCapture(e.pointerId); } catch (error) { /* sin captura, sigue igual */ }
+      }
       var ids = Object.keys(yo.punteros);
       if (ids.length === 1) {
         yo.x += e.clientX - p.x; yo.y += e.clientY - p.y; yo.aplicar();
@@ -126,7 +132,15 @@
     }
     marco.addEventListener('pointerup', soltar);
     marco.addEventListener('pointercancel', soltar);
+    /* Sin captura todavía, soltar afuera no llega al marco: la ventana lo avisa. */
+    window.addEventListener('pointerup', soltar);
+    window.addEventListener('pointercancel', soltar);
     marco.addEventListener('dragstart', function (e) { e.preventDefault(); });
+    /* Después de arrastrar, soltar sobre una caja con vínculo no navega. */
+    marco.addEventListener('click', function (e) {
+      if (yo.arrastro && e.target.closest('a')) e.preventDefault();
+      yo.arrastro = false;
+    }, true);
     marco.addEventListener('dblclick', function (e) { if (!e.target.closest('.lupa-barra')) yo.alternar(); });
     marco.addEventListener('keydown', function (e) {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -145,7 +159,11 @@
       }
     }
     document.addEventListener('fullscreenchange', alCambiarPantalla);
-    this.descartar = function () { document.removeEventListener('fullscreenchange', alCambiarPantalla); };
+    this.descartar = function () {
+      document.removeEventListener('fullscreenchange', alCambiarPantalla);
+      window.removeEventListener('pointerup', soltar);
+      window.removeEventListener('pointercancel', soltar);
+    };
   }
 
   function boton(barra, simbolo, titulo, accion) {

@@ -1,0 +1,22 @@
+{
+ "titulo": "Cadena de ejemplo",
+ "forma": "cadena",
+ "orienta": "LEEME.md",
+ "funciones": "funciones.md",
+ "eslabones": [
+  {
+   "carpeta": "fuentes",
+   "titulo": "Fuentes"
+  },
+  {
+   "carpeta": "revision",
+   "titulo": "Revisión"
+  },
+  {
+   "carpeta": "notas",
+   "titulo": "Notas publicadas",
+   "versiones": "sufijo",
+   "indice": "notas/VIGENTES.md"
+  }
+ ]
+}

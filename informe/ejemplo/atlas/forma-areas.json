@@ -1,0 +1,24 @@
+{
+ "titulo": "Casa de ejemplo",
+ "forma": "areas",
+ "orienta": "LEEME.md",
+ "rutea": "RUTEO.md",
+ "funciones": "funciones.md",
+ "areas": {
+  "carpeta": "areas",
+  "reglas": "reglas.md",
+  "procedimientos": "procedimientos",
+  "documento": "procedimiento.md"
+ },
+ "ocultar": [
+  "**/borradores"
+ ],
+ "salidas": {
+  "completa": {},
+  "invitado": {
+   "ocultar": [
+    "areas/cobranzas"
+   ]
+  }
+ }
+}

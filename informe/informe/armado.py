@@ -11,7 +11,7 @@ from pathlib import Path
 from . import VERSION
 from .citas import CitaInvalida, ubicar
 from .datos import ErrorDatos, validar
-from .mapa import dibujar
+from .mapa import dibujar, enlaces
 from .markdown import a_html, en_linea
 
 MERMAID = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"
@@ -172,7 +172,7 @@ def _hallazgos(b, docs, donde, cuenta):
     return '<div class="grupo-hallazgos">%s<div class="hallazgos">%s</div></div>' % (filtros, "".join(tarjetas))
 
 
-def _bloque(b, docs, donde, cuenta):
+def _bloque(b, docs, donde, cuenta, base=""):
     t = b["tipo"]
     if t == "texto":
         return "".join("<p>%s</p>" % en_linea(p) for p in b["parrafos"])
@@ -192,14 +192,15 @@ def _bloque(b, docs, donde, cuenta):
         return _figura(_diagrama(b["mermaid"], b.get("titulo")), b.get("pie"))
     if t == "mapa":
         cuenta[1] += 1
-        botones, dibujo = dibujar(b, cuenta[1])
+        botones, dibujo = dibujar(b, cuenta[1], base)
         pie = "<figcaption>%s</figcaption>" % en_linea(b["pie"]) if b.get("pie") else ""
         return '<figure class="mapa" data-modo="%s">%s%s%s</figure>' % (b.get("fuera_de_vista", "atenuar"), botones,
                                                                       dibujo, pie)
     if t == "matriz":
         return _matriz(b)
     if t == "desplegable":
-        dentro = "\n".join(_bloque(h, docs, "%s.bloques[%d]" % (donde, j), cuenta) for j, h in enumerate(b["bloques"]))
+        dentro = "\n".join(_bloque(h, docs, "%s.bloques[%d]" % (donde, j), cuenta, base)
+                            for j, h in enumerate(b["bloques"]))
         return '<details class="mas"><summary>%s</summary><div class="mas-dentro">%s</div></details>' \
                % (en_linea(b["titulo"]), dentro)
     if t == "hallazgos":
@@ -262,22 +263,47 @@ def _pagina(titulo, cuerpo, base, recursos, tema, mermaid):
                libreria, base, recursos["visor.js"], base, recursos["pagina.js"]))
 
 
-def componer(d, raices, mermaid=None):
-    """Devuelve {ruta relativa: bytes} con el sitio entero. No escribe nada."""
-    validar(d)
-    docs = Documentos(raices)
-    archivos, recursos = {}, {}
+def recursos(mermaid=None):
+    """(archivos, recursos, origen de la librería): la hoja de estilos y los scripts, cada uno con su huella."""
+    archivos, nombres = {}, {}
     for nombre in ("estilo.css", "visor.js", "pagina.js"):
         contenido = (ESTATICO / nombre).read_bytes()
-        recursos[nombre] = "estatico/" + _nombre_con_huella(nombre, contenido)
-        archivos[recursos[nombre]] = contenido
+        nombres[nombre] = "estatico/" + _nombre_con_huella(nombre, contenido)
+        archivos[nombres[nombre]] = contenido
     origen = mermaid or MERMAID
     if "://" not in origen:
-        contenido = Path(origen).read_bytes()
+        try:
+            contenido = Path(origen).read_bytes()
+        except OSError as error:
+            raise ErrorDatos("--mermaid: no se pudo leer %s: %s" % (origen, error)) from None
         origen = "estatico/" + _nombre_con_huella("mermaid.js", contenido)
         archivos[origen] = contenido
     elif not origen.startswith("https://"):
         raise ErrorDatos("--mermaid: una dirección tiene que ser https")
+    return archivos, nombres, origen
+
+
+def comprobar_enlaces(vinculos, archivos):
+    """Frena si un vínculo de un mapa lleva a una página que no se arma."""
+    for donde, enlace in vinculos:
+        if enlace.partition("#")[0] not in archivos:
+            raise ErrorDatos("%s: el vínculo %s lleva a una página que no se arma" % (donde, enlace))
+
+
+def _mapas(bloques, donde):
+    for j, b in enumerate(bloques):
+        if b["tipo"] == "mapa":
+            for enlace in enlaces(b):
+                yield "%s.bloques[%d]" % (donde, j), enlace
+        elif b["tipo"] == "desplegable":
+            yield from _mapas(b["bloques"], "%s.bloques[%d]" % (donde, j))
+
+
+def componer(d, raices, mermaid=None):
+    """Devuelve {ruta relativa: bytes} con el sitio entero. No escribe nada."""
+    validar(d)
+    docs = Documentos(raices)
+    archivos, recursos_, origen = recursos(mermaid)
     tema = _tema(d)
 
     cuenta, secciones, menu = [0, 0], [], []
@@ -299,7 +325,7 @@ def componer(d, raices, mermaid=None):
     cabeza.append("</header>")
     indice = '<div class="hoja">%s<nav class="menu" aria-label="Secciones">%s</nav>%s</div>' \
              % ("".join(cabeza), "".join(menu), "\n".join(secciones))
-    archivos["index.html"] = _pagina(d["titulo"], indice, "", recursos, tema, origen).encode("utf-8")
+    archivos["index.html"] = _pagina(d["titulo"], indice, "", recursos_, tema, origen).encode("utf-8")
 
     for doc in docs.orden:
         rangos = [(c["a"], c["b"], c["ancla"]) for c in doc["citas"]]
@@ -315,8 +341,10 @@ def componer(d, raices, mermaid=None):
                   '<aside class="pasajes"><h2>Pasajes señalados</h2><ol>%s</ol></aside>'
                   '<article class="documento">%s</article></div>'
                   % (_e(doc["raiz"]), _e(doc["ruta"]), pasajes, convertido))
-        archivos[doc["pagina"]] = _pagina("%s · %s" % (doc["ruta"], d["titulo"]), cuerpo, "../", recursos, tema,
+        archivos[doc["pagina"]] = _pagina("%s · %s" % (doc["ruta"], d["titulo"]), cuerpo, "../", recursos_, tema,
                                           origen).encode("utf-8")
+    comprobar_enlaces([v for i, s in enumerate(d["secciones"]) for v in _mapas(s["bloques"], "secciones[%d]" % i)],
+                      archivos)
     return archivos
 
 
@@ -339,7 +367,11 @@ def _destino(salida, relativo):
 
 def armar(d, raices, salida, mermaid=None):
     """Escribe el sitio en `salida`. Solo pisa una carpeta vacía o una que ya era de un informe."""
-    archivos = componer(d, raices, mermaid)
+    return escribir(componer(d, raices, mermaid), salida)
+
+
+def escribir(archivos, salida):
+    """Escribe un sitio ya compuesto. Solo pisa una carpeta vacía o una que ya era de un informe o de un atlas."""
     salida = Path(salida)
     previos = []
     if _es_enlace(salida):
