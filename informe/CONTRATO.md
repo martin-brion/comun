@@ -254,8 +254,9 @@ a ningún modelo ni usa red. Sin resumen guardado, o con uno de otra versión de
 - La clave es la ruta relativa a la base. `huella` es el SHA-256 de los bytes del archivo tal como está en disco.
 - Un resumen vale solo si su huella es la del archivo de hoy: cambiar un archivo invalida solo el suyo.
 - `resumen`: de 1 a 1200 caracteres, con el formato de línea.
-- `pendientes` lista los documentos que se muestran y no tienen resumen vigente: una línea `<huella> <ruta>` por
-  documento, ordenadas por ruta. Con `--json` da la caché a llenar, con `resumen` vacío. Si el archivo de resúmenes no
+- `pendientes` lista los documentos cuyo resumen muestra el atlas (en el mapa y en las páginas de los niveles 2 y 3)
+  y que no tienen uno vigente: una línea `<huella> <ruta>` por documento, ordenadas por ruta. Una versión reemplazada o
+  un índice no muestran resumen y no se listan. Con `--json` da la caché a llenar, con `resumen` vacío. Si el archivo de resúmenes no
   existe, todos están pendientes.
 - `incorporar` suma a la caché los resúmenes de otro archivo con el mismo formato. Frena, sin escribir nada, si una
   ruta no es un archivo de la base o si su huella no es la de hoy. Un `resumen` vacío se saltea y se cuenta. La caché se

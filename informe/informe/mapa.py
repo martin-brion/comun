@@ -104,8 +104,28 @@ def _anclas(flechas, cajas):
                 f[punta] = (caja["x"] + (caja["w"] if lado == "der" else 0), caja["y"] + caja["h"] * fraccion)
 
 
-def dibujar(b, numero):
-    """Devuelve la figura completa (botones de vista, dibujo y pie) para un bloque `mapa`."""
+def _vinculo(dibujo, enlace, base, titulo):
+    """Envuelve un dibujo en un vínculo a otra página del sitio, si lo tiene."""
+    if not enlace:
+        return dibujo
+    return '<a class="mp-vinculo" href="%s" aria-label="%s">%s</a>' % (_e(base + enlace), _e(titulo), dibujo)
+
+
+def enlaces(b):
+    """Los vínculos que lleva un bloque `mapa`, para comprobar que cada uno tiene su página."""
+    for c in b["columnas"]:
+        for item in c["items"]:
+            if item.get("enlace"):
+                yield item["enlace"]
+            for ficha in item.get("dentro") or []:
+                if ficha.get("enlace"):
+                    yield ficha["enlace"]
+
+
+def dibujar(b, numero, base=""):
+    """Devuelve la figura completa (botones de vista, dibujo y pie) para un bloque `mapa`.
+
+    `base` es lo que hay que anteponer a un vínculo para llegar a la raíz del sitio desde la página que lo muestra."""
     columnas = b["columnas"]
     n = len(columnas)
     ancho_col = max(170.0, min(320.0, (ANCHO - 2 * MARGEN - (n - 1) * SEPARACION) / n))
@@ -177,17 +197,18 @@ def dibujar(b, numero):
                 for r in m["textos"]:
                     partes.append('<text class="mp-texto" x="%.1f" y="%.1f">%s</text>' % (x + RELLENO, yt + 12, _e(r)))
                     yt += ALTO_TEXTO
-            dibujo_cajas.append('<g class="mp-%s"%s>%s</g>' % (item.get("estado", "normal"), _vista(item.get("vistas")),
-                                                              "".join(partes)))
+            dibujo_cajas.append(_vinculo('<g class="mp-%s"%s>%s</g>' % (item.get("estado", "normal"),
+                                                                       _vista(item.get("vistas")), "".join(partes)),
+                                         item.get("enlace"), base, item["titulo"]))
             if m["fichas"]:
                 yt += 8
                 for ficha, fx, fy, fw in m["fichas"]:
-                    dibujo_cajas.append(
+                    dibujo_cajas.append(_vinculo(
                         '<g class="mp-ficha mp-%s"%s><rect class="mp-caja" x="%.1f" y="%.1f" width="%.1f" height="%d" rx="5"/>'
                         '<text class="mp-texto" x="%.1f" y="%.1f" text-anchor="middle">%s</text></g>'
                         % (ficha.get("estado", "normal"), _vista(ficha.get("vistas", item.get("vistas"))),
                            x + RELLENO + fx, yt + fy, fw, ALTO_FICHA, x + RELLENO + fx + fw / 2, yt + fy + 16,
-                           _e(ficha["titulo"])))
+                           _e(ficha["titulo"])), ficha.get("enlace"), base, ficha["titulo"]))
 
     # 3. Flechas: entre columnas vecinas, con un codo en el espacio que las separa; o derecho hacia abajo.
     flechas = [dict(f) for f in b.get("flechas") or []]

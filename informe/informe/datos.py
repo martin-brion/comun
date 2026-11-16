@@ -103,6 +103,8 @@ def _b_diagrama(b, donde):
 
 
 ESTADOS_CAJA = ("normal", "acento", "aviso", "apagado")
+# Una página del mismo sitio, relativa a su raíz. Cada tramo empieza con letra o número: no hay forma de escribir `..`.
+ENLACE = re.compile(r"^[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_.-]*)*\.html(#[A-Za-z0-9_-]{1,80})?$")
 MODOS = ("atenuar", "ocultar")
 
 
@@ -112,6 +114,11 @@ def _vistas_de(d, donde, vistas):
     lista = d["vistas"]
     if not isinstance(lista, list) or any(v not in vistas for v in lista):
         _fallo(donde, '"vistas" tiene que ser una lista de vistas declaradas en el mapa')
+
+
+def _enlace_de(d, donde):
+    if "enlace" in d and (not isinstance(d["enlace"], str) or len(d["enlace"]) > 300 or not ENLACE.match(d["enlace"])):
+        _fallo(donde, '"enlace" tiene que ser una página del mismo sitio, relativa a su raíz: area/nombre.html')
 
 
 def _estado_de(d, donde):
@@ -161,7 +168,8 @@ def _b_mapa(b, donde):
                     _fallo(di, "una caja de varias filas no comparte sus filas con otra cosa de la misma columna")
                 usadas.add((ci, fila))
                 continue
-            _solo(item, ("id", "titulo", "texto", "estado", "vistas", "fila", "filas", "dentro"), di)
+            _solo(item, ("id", "titulo", "texto", "estado", "vistas", "fila", "filas", "dentro", "enlace"), di)
+            _enlace_de(item, di)
             abarca = item.get("filas", 1)
             if not isinstance(abarca, int) or isinstance(abarca, bool) or not 1 <= abarca <= 10:
                 _fallo(di, '"filas" tiene que ser un número entre 1 y 10')
@@ -181,7 +189,8 @@ def _b_mapa(b, donde):
             _estado_de(item, di)
             for fi, ficha in enumerate(item.get("dentro") or []):
                 df = "%s.dentro[%d]" % (di, fi)
-                _solo(_objeto(ficha, df), ("titulo", "estado", "vistas"), df)
+                _solo(_objeto(ficha, df), ("titulo", "estado", "vistas", "enlace"), df)
+                _enlace_de(ficha, df)
                 _texto(ficha, "titulo", df, tope=40)
                 _estado_de(ficha, df)
                 _vistas_de(ficha, df, vistas)
