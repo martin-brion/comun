@@ -165,9 +165,11 @@ Código 0: hecho. 1: la declaración, la base o los resúmenes tienen un error, 
 2. **La forma se declara, no se adivina.** Sin el archivo de la forma, o con una clave que no figura acá, no se arma
    nada. Si a la base le falta una carpeta declarada, el error dice cuáles faltan, todas juntas.
 3. **Lee solo dentro de la base.** Toda ruta de la declaración es relativa a la base, sin `..`, sin `.` (salvo la carpeta
-   de áreas, que puede ser `.`) y sin unidad ni barra inicial. Un enlace o un punto de unión encontrado al recorrer la
+   de áreas, que puede ser `.`), sin unidad ni barra inicial y sin tramos que terminen en punto. Lo que un recorte
+   oculta se decide también con el nombre que le da el disco. Un enlace o un punto de unión encontrado al recorrer la
    base frena el armado: se oculta con `ocultar` o se saca. Los nombres que empiezan con `.` no se recorren nunca.
-4. **Solo markdown.** Se leen los archivos `.md`, de hasta 2 MB y en UTF-8. Uno que no cumple frena y se dice cuál.
+4. **Solo markdown.** Se leen los archivos `.md`, de hasta 2 MB y en UTF-8; todo archivo declarado tiene que ser
+   `.md`. Uno que no cumple frena y se dice cuál.
    Los demás archivos no se leen ni se muestran.
 5. **Lo que se muestra es lo que está.** El atlas no corrige ni completa. Un archivo declarado que falta o que está
    vacío se muestra como «sin definir», con su ruta: es lo que a su dueño le falta cargar. Vacío quiere decir que, sin
@@ -208,11 +210,13 @@ es un error.
 pueden repetirse ni estar una dentro de otra.
 
 - Sin `versiones`, cada archivo de la carpeta (también de sus subcarpetas) es una pieza con una sola versión.
-- `versiones: carpeta`: cada subcarpeta es una pieza y sus archivos son las versiones. Un archivo suelto es una pieza.
+- `versiones: carpeta`: cada subcarpeta es una pieza y sus archivos son las versiones; una subcarpeta vacía es una
+  pieza sin definir. Un archivo suelto es otra pieza, aunque se llame como una subcarpeta.
 - `versiones: sufijo`: los archivos que se llaman igual salvo un final `-v<número>`, `_v<número>` o `.v<número>` son
   versiones de la misma pieza, ordenadas por ese número.
 - `indice`, que va junto con `versiones`: el archivo, relativo a la base, que marca la versión vigente. Cada vínculo
-  markdown `[texto](ruta.md)` del índice, relativo a la carpeta del índice, marca como vigente ese archivo. El índice no
+  markdown `[texto](ruta.md)` del índice, relativo a la carpeta del índice, marca como vigente ese archivo (fuera de
+  los bloques y los tramos de código). El índice no
   es una pieza.
 
 Qué frena, además de una declaración mal escrita: que falte la base, la carpeta de áreas, la de un eslabón o el
