@@ -110,6 +110,7 @@
     marco.addEventListener('pointermove', function (e) {
       var p = yo.punteros[e.pointerId];
       if (!p) return;
+      if (e.pointerType === 'mouse' && !e.buttons) { soltar(e); return; }
       if (!p.capturado && Math.hypot(e.clientX - p.x0, e.clientY - p.y0) > 4) {
         p.capturado = true; yo.arrastro = true;
         try { marco.setPointerCapture(e.pointerId); } catch (error) { /* sin captura, sigue igual */ }
@@ -131,6 +132,9 @@
     }
     marco.addEventListener('pointerup', soltar);
     marco.addEventListener('pointercancel', soltar);
+    /* Sin captura todavía, soltar afuera no llega al marco: la ventana lo avisa. */
+    window.addEventListener('pointerup', soltar);
+    window.addEventListener('pointercancel', soltar);
     marco.addEventListener('dragstart', function (e) { e.preventDefault(); });
     /* Después de arrastrar, soltar sobre una caja con vínculo no navega. */
     marco.addEventListener('click', function (e) {
@@ -155,7 +159,11 @@
       }
     }
     document.addEventListener('fullscreenchange', alCambiarPantalla);
-    this.descartar = function () { document.removeEventListener('fullscreenchange', alCambiarPantalla); };
+    this.descartar = function () {
+      document.removeEventListener('fullscreenchange', alCambiarPantalla);
+      window.removeEventListener('pointerup', soltar);
+      window.removeEventListener('pointercancel', soltar);
+    };
   }
 
   function boton(barra, simbolo, titulo, accion) {

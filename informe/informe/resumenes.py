@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from pathlib import Path
 
 from .datos import ErrorDatos
@@ -84,9 +85,16 @@ def guardar(ruta, cache):
     ruta = Path(ruta)
     if ruta.is_symlink():
         raise ErrorDatos("el archivo de resúmenes no puede ser un enlace: %s" % ruta)
-    temporal = ruta.with_name(ruta.name + ".nuevo")
-    temporal.write_bytes(como_texto(cache).encode("utf-8"))
-    os.replace(temporal, ruta)
+    # mkstemp crea un archivo que no existía (O_EXCL): un enlace puesto ahí de antemano no se sigue.
+    descriptor, temporal = tempfile.mkstemp(prefix=ruta.name + ".", suffix=".nuevo", dir=str(ruta.parent or "."))
+    try:
+        with os.fdopen(descriptor, "wb") as archivo:
+            archivo.write(como_texto(cache).encode("utf-8"))
+        os.replace(temporal, ruta)
+    except BaseException:
+        if os.path.exists(temporal):
+            os.unlink(temporal)
+        raise
 
 
 def _huella_en_base(base, ruta):

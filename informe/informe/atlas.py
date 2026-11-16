@@ -127,7 +127,7 @@ class _Armador:
             if ref["estado"] != "ok":
                 filas.append("<li>%s</li>" % self.sin_definir(ref))
                 continue
-            pagina = self.pagina_doc(ref["ruta"], camino)
+            pagina = self.pagina_doc(ref["ruta"], camino + [(self.titulo_doc(ref["ruta"]), None)])
             resumen = self.resumen(ref["ruta"])
             filas.append('<li><a href="%s%s">%s</a> <span class="suave"><code>%s</code></span>%s</li>'
                          % (base, pagina, _e(self.titulo_doc(ref["ruta"])), _e(ref["ruta"]),
@@ -244,7 +244,10 @@ class _Armador:
                 caja = {"id": ident, "fila": 1, "titulo": _corto(p["nombre"], 80),
                         "enlace": "%s#pieza-%d" % (pagina, j + 1)}
                 vigente = p["vigente"]
-                if vigente is None:
+                if not p["versiones"]:
+                    caja["estado"] = "apagado"
+                    caja["texto"] = "Sin definir: la carpeta está vacía."
+                elif vigente is None:
                     caja["estado"] = "aviso"
                     caja["texto"] = "Ninguna versión figura como vigente en el índice."
                 elif p["refs"][vigente]["estado"] != "ok":
@@ -423,7 +426,10 @@ class _Armador:
     def pieza(self, i, j, p, camino, paginas):
         partes = ['<h3>%s</h3>' % _e(p["nombre"])]
         vigente = p["vigente"]
-        if vigente is None:
+        if not p["versiones"]:
+            partes.append(self.sin_definir({"ruta": "%s/%s" % (self.a["eslabones"][i]["carpeta"], p["clave"]),
+                                            "estado": "vacio"}))
+        elif vigente is None:
             partes.append('<p class="aviso-version">Ninguna versión figura como vigente en el índice.</p>')
         elif p["refs"][vigente]["estado"] != "ok":
             partes.append(self.sin_definir(p["refs"][vigente]))

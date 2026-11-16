@@ -21,6 +21,7 @@ TOPE_ARCHIVOS = 5000
 TOPE_ENTRADAS = 50000
 TOPE_HONDURA = 24
 _VINCULO = re.compile(r"\[[^\]\n]*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"\n]*\")?\s*\)")
+_TRAMO_CODIGO = re.compile(r"(`+).+?\1")
 _VERSION = re.compile(r"^(.*?)[-_.]v(\d{1,9})$", re.IGNORECASE)
 
 
@@ -69,7 +70,26 @@ class Base:
         self.entradas = 0
 
     def oculto(self, ruta):
-        return oculto(self.patrones, ruta)
+        """Verdadero si la ruta, o el nombre que le da el disco, queda fuera de la salida."""
+        if oculto(self.patrones, ruta):
+            return True
+        real = self.real(ruta)
+        return real is not None and oculto(self.patrones, real)
+
+    def real(self, relativa):
+        """La ruta tal como la nombra el disco, relativa a la base, o None si no existe.
+
+        En Windows «Altas», «ALTAS~1» o un nombre corto abren la misma carpeta que «altas»: el recorte se decide
+        con el nombre de verdad."""
+        if relativa in ("", "."):
+            return "."
+        ruta = self._ruta(relativa)
+        if not ruta.exists():
+            return None
+        try:
+            return ruta.resolve().relative_to(self.raiz).as_posix() or "."
+        except ValueError:
+            raise ErrorDatos("%s sale de la base" % relativa) from None
 
     def _ruta(self, relativa):
         """La ruta en disco; frena si algún tramo es un enlace."""
@@ -90,9 +110,11 @@ class Base:
         return self._ruta(relativa).is_file()
 
     def recorrer(self, relativa):
-        """(carpetas, archivos .md) visibles debajo de una carpeta, como rutas relativas a la base, en orden."""
+        """(carpetas, archivos .md) visibles debajo de una carpeta, como rutas relativas a la base, en orden.
+
+        Las rutas salen con el nombre que les da el disco."""
         carpetas, archivos = [], []
-        self._recorrer(relativa, carpetas, archivos, 0)
+        self._recorrer(self.real(relativa), carpetas, archivos, 0)
         return carpetas, archivos
 
     def _recorrer(self, relativa, carpetas, archivos, hondura):
@@ -106,7 +128,7 @@ class Base:
             if self.entradas > TOPE_ENTRADAS:
                 raise ErrorDatos("la base pasa de %d archivos y carpetas: ocultá lo que no va" % TOPE_ENTRADAS)
             hija = e.name if relativa == "." else "%s/%s" % (relativa, e.name)
-            if self.oculto(hija):
+            if oculto(self.patrones, hija):          # el nombre ya es el del disco
                 continue
             if e.is_symlink() or (hasattr(e, "is_junction") and e.is_junction()):
                 raise ErrorDatos("la base tiene un enlace en %s: no se siguen enlaces (sacalo o ponelo en ocultar)"
@@ -123,6 +145,10 @@ class Base:
         """Lee un documento una sola vez: texto, huella, título, primer párrafo y si está vacío."""
         if relativa in self.docs:
             return self.docs[relativa]
+        if not relativa.lower().endswith(".md"):
+            raise ErrorDatos("%s no es un archivo .md: los demás archivos no se leen" % relativa)
+        if self.oculto(relativa):
+            raise ErrorDatos("%s queda fuera de esta salida: no se lee" % relativa)
         ruta = self._ruta(relativa)
         if ruta.stat().st_size > TOPE_DOCUMENTO:
             raise ErrorDatos("%s pasa de %d bytes" % (relativa, TOPE_DOCUMENTO))
@@ -154,6 +180,7 @@ class Base:
             return None
         if not self.es_archivo(relativa):
             return {"ruta": relativa, "estado": "falta"}
+        relativa = self.real(relativa)
         return {"ruta": relativa, "estado": "vacio" if self.doc(relativa)["vacio"] else "ok"}
 
 
@@ -210,6 +237,7 @@ def vinculos(doc):
     for n, linea in enumerate(doc["limpio"].split("\n"), 1):
         if n in codigo:
             continue
+        linea = _TRAMO_CODIGO.sub(lambda m: " " * len(m.group(0)), linea)
         for m in _VINCULO.finditer(linea):
             destino = unquote(m.group(1).split("#", 1)[0])
             if not destino or "://" in destino or destino.lower().startswith("mailto:"):
@@ -247,9 +275,10 @@ def _comprobar_carpetas(base, pedidas, nombre_recorte):
 def _leer_areas(base, forma, propios):
     a = forma["areas"]
     _comprobar_carpetas(base, [("areas.carpeta", a["carpeta"])], base.recorte)
-    carpetas, archivos = base.recorrer(a["carpeta"])
+    raiz_areas = base.real(a["carpeta"])
+    carpetas, archivos = base.recorrer(raiz_areas)
     areas = []
-    for area in _hijas(carpetas, a["carpeta"]):
+    for area in _hijas(carpetas, raiz_areas):
         reglas = "%s/%s" % (area, a["reglas"])
         carpeta_procs = "%s/%s" % (area, a["procedimientos"])
         procedimientos = []
@@ -273,14 +302,22 @@ def _leer_areas(base, forma, propios):
     return areas
 
 
-def _piezas(eslabon, archivos):
-    """Agrupa los archivos de un eslabón en piezas, cada una con sus versiones en orden (la más nueva al final)."""
+def _piezas(eslabon, archivos, carpetas=()):
+    """Agrupa los archivos de un eslabón en piezas, cada una con sus versiones en orden (la más nueva al final).
+
+    Con versiones por carpeta, cada subcarpeta es una pieza aunque esté vacía, y no se mezcla con un archivo suelto
+    que se llame igual."""
     carpeta, modo = eslabon["carpeta"], eslabon["versiones"]
     grupos = {}
+    if modo == "carpeta":
+        for c in carpetas:
+            resto = c[len(carpeta) + 1:]
+            if resto and "/" not in resto:
+                grupos.setdefault(resto + "/", [])
     for r in archivos:
         resto = r[len(carpeta) + 1:]
         if modo == "carpeta" and "/" in resto:
-            clave, numero = resto.split("/", 1)[0], None
+            clave, numero = resto.split("/", 1)[0] + "/", None
         elif modo == "sufijo":
             directorio, nombre = posixpath.split(resto)
             m = _VERSION.match(nombre[:-3])
@@ -310,16 +347,17 @@ def _leer_cadena(base, forma, propios):
             faltan.append("falta el índice %s (eslabones[%d].indice)" % (e["indice"], i))
     if faltan:
         raise ErrorDatos("la base no tiene la forma declarada: %s" % "; ".join(faltan))
-    indices = {e["indice"] for e in eslabones if e["indice"]}
+    indices = {base.real(e["indice"]) for e in eslabones if e["indice"]}
     salida = []
     for i, e in enumerate(eslabones):
-        _, archivos = base.recorrer(e["carpeta"])
+        e = dict(e, carpeta=base.real(e["carpeta"]))
+        carpetas, archivos = base.recorrer(e["carpeta"])
         archivos = [r for r in archivos if r not in indices and r not in propios]
-        piezas = _piezas(e, archivos)
+        piezas = _piezas(e, archivos, carpetas)
         if e["indice"]:
             del_eslabon = set(archivos)
             marcados = set()
-            for destino in vinculos(base.doc(e["indice"])):
+            for destino in vinculos(base.doc(base.real(e["indice"]))):
                 if destino == ".." or destino.startswith("../") or destino.startswith("/"):
                     raise ErrorDatos("el índice %s marca como vigente un archivo fuera de la base: %s"
                                      % (e["indice"], destino))
@@ -337,7 +375,7 @@ def _leer_cadena(base, forma, propios):
                 p["vigente"] = vigentes[0] if vigentes else None
         else:
             for p in piezas:
-                p["vigente"] = p["versiones"][-1]
+                p["vigente"] = p["versiones"][-1] if p["versiones"] else None
         for p in piezas:
             p["antecedentes"] = [r for r in reversed(p["versiones"]) if r != p["vigente"]]
             p["refs"] = {r: base.referencia(r) for r in p["versiones"]}

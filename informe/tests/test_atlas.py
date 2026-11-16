@@ -2,6 +2,7 @@
 import copy
 import io
 import json
+import os
 import posixpath
 import re
 import shutil
@@ -209,7 +210,7 @@ class Cadena(unittest.TestCase):
         e = {"carpeta": "n", "versiones": "carpeta"}
         piezas = lector._piezas(e, ["n/a/1.md", "n/a/2.md", "n/suelta.md"])
         self.assertEqual([(p["clave"], p["versiones"]) for p in piezas],
-                         [("a", ["n/a/1.md", "n/a/2.md"]), ("suelta", ["n/suelta.md"])])
+                         [("a/", ["n/a/1.md", "n/a/2.md"]), ("suelta", ["n/suelta.md"])])
 
     def test_las_flechas_salen_de_los_vinculos(self):
         a = leer("forma-cadena.json", CADENA)
@@ -522,6 +523,94 @@ class Comando(unittest.TestCase):
             codigo = main(["validar", str(AQUI / "ejemplo" / "datos.json"), "--raiz",
                            "casa=%s" % (AQUI / "ejemplo" / "fuentes")])
         self.assertEqual(codigo, 0)
+
+
+class Revision(unittest.TestCase):
+    """Los casos concretos de la revisión independiente, uno por defecto."""
+
+    def test_un_nombre_que_windows_abre_igual_no_elude_el_recorte(self):
+        def cambio(d):
+            d["orienta"] = "areas/altas./reglas.md"
+            d["ocultar"] = ["areas/altas"]
+        with self.assertRaises(ErrorDatos) as c:
+            leer("forma-areas.json", CASA, "completa", cambio)
+        self.assertIn("relativa a la base", str(c.exception))
+
+    @unittest.skipUnless(os.name == "nt", "solo Windows abre «altas.» como «altas»")
+    def test_el_recorte_se_decide_con_el_nombre_del_disco(self):
+        base = lector.Base(CASA, [forma._patron("areas/altas", "x")])
+        self.assertIsNone(base.referencia("areas/altas./reglas.md"))
+        with self.assertRaises(ErrorDatos):
+            base.doc("areas/altas./reglas.md")
+
+    def test_la_cache_no_se_escribe_a_traves_de_un_enlace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ajeno = Path(tmp) / "ajeno.txt"
+            ajeno.write_text("ajeno", encoding="utf-8")
+            cache = Path(tmp) / "resumenes.json"
+            try:
+                Path(str(cache) + ".nuevo").symlink_to(ajeno)
+            except OSError:
+                self.skipTest("este sistema no deja crear enlaces sin permisos")
+            resumenes.guardar(cache, {})
+            self.assertEqual(ajeno.read_text(encoding="utf-8"), "ajeno")
+            self.assertEqual(json.loads(cache.read_text(encoding="utf-8"))["resumenes"], {})
+
+    def test_un_archivo_declarado_que_no_es_markdown_no_se_lee(self):
+        with self.assertRaises(ErrorDatos) as c:
+            leer("forma-areas.json", CASA, "completa", lambda d: d.update(orienta="areas/altas/listado.csv"))
+        self.assertIn("tiene que ser un archivo .md", str(c.exception))
+        with self.assertRaises(ErrorDatos):
+            lector.Base(CASA, []).doc("areas/altas/listado.csv")
+
+    def base_en_carpetas(self, tmp, indice, archivos, vacias=()):
+        base = Path(tmp) / "b"
+        (base / "notas").mkdir(parents=True)
+        (base / "LEEME.md").write_text("# B\n\nUna base.\n", encoding="utf-8")
+        (base / "notas" / "VIGENTES.md").write_text(indice, encoding="utf-8")
+        for ruta, contenido in archivos.items():
+            (base / ruta).parent.mkdir(parents=True, exist_ok=True)
+            (base / ruta).write_text(contenido, encoding="utf-8")
+        for carpeta in vacias:
+            (base / carpeta).mkdir(parents=True)
+        d = {"titulo": "B", "forma": "cadena", "orienta": "LEEME.md",
+             "eslabones": [{"carpeta": "notas", "titulo": "Notas", "versiones": "carpeta", "indice": "notas/VIGENTES.md"}]}
+        return lector.leer(forma.validar(d), base)
+
+    def test_un_archivo_suelto_y_una_carpeta_que_se_llaman_igual_son_dos_piezas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a = self.base_en_carpetas(tmp, "[suelta](altas.md)\n[carpeta](altas/v1.md)\n",
+                                      {"notas/altas.md": "# Suelta\n\nTexto.\n", "notas/altas/v1.md": "# V1\n\nTexto.\n"})
+            piezas = a["eslabones"][0]["piezas"]
+            self.assertEqual([(p["vigente"], p["versiones"]) for p in piezas],
+                             [("notas/altas.md", ["notas/altas.md"]), ("notas/altas/v1.md", ["notas/altas/v1.md"])])
+
+    def test_una_carpeta_de_pieza_vacia_se_muestra_sin_definir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a = self.base_en_carpetas(tmp, "# Vigentes\n", {}, vacias=["notas/por-definir"])
+            piezas = a["eslabones"][0]["piezas"]
+            self.assertEqual([(p["nombre"], p["versiones"], p["vigente"]) for p in piezas], [("Por definir", [], None)])
+            archivos = atlas.componer(a)[0]
+            self.assertIn("Sin definir: la carpeta está vacía.", texto(archivos, "index.html"))
+            self.assertIn("<code>notas/por-definir/</code>", texto(archivos, "eslabon/notas.html"))
+
+    def test_un_vinculo_dentro_de_un_tramo_de_codigo_no_marca_vigente(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "cadena"
+            shutil.copytree(CADENA, base)
+            (base / "notas" / "VIGENTES.md").write_text(
+                "# Vigentes\n\nEjemplo: `[x](respaldo-v1.md)`\n\n- [vigente](respaldo-v2.md)\n", encoding="utf-8")
+            notas = leer("forma-cadena.json", base)["eslabones"][2]
+            self.assertEqual(next(p for p in notas["piezas"] if p["nombre"] == "Respaldo")["vigente"],
+                             "notas/respaldo-v2.md")
+
+    def test_un_documento_de_mas_vuelve_a_su_nivel(self):
+        archivos = sitio("forma-areas.json", CASA, "completa")
+        for doc, espera in (("doc/areas-cobranzas-notas-del-equipo.html", ["../index.html", "../area/cobranzas.html"]),
+                            ("doc/areas-altas-procedimientos-alta-de-cliente-plantilla-de-ficha.html",
+                             ["../index.html", "../area/altas.html", "../proc/altas-alta-de-cliente.html"])):
+            camino = re.search(r'<nav class="camino".*?</nav>', texto(archivos, doc)).group(0)
+            self.assertEqual(re.findall(r'href="([^"]+)"', camino), espera, doc)
 
 
 class VinculosDelMapa(unittest.TestCase):

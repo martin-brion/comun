@@ -45,9 +45,18 @@ def ruta_relativa(valor, donde, punto=False):
         return "."
     partes = valor.split("/")
     for p in partes:
-        if p in ("", ".", "..") or _PROHIBIDO.search(p) or p != p.strip():
+        # Windows abre «altas.» y «altas » como «altas»: un tramo así nombraría lo mismo con otro nombre.
+        if p in ("", ".", "..") or _PROHIBIDO.search(p) or p != p.strip() or p.endswith("."):
             _fallo(donde, "la ruta %r tiene que ser relativa a la base y no puede salir de ella" % valor)
     return "/".join(partes)
+
+
+def archivo_md(valor, donde):
+    """Una ruta relativa a un archivo .md: los demás archivos no se leen."""
+    ruta = ruta_relativa(valor, donde)
+    if not ruta.lower().endswith(".md"):
+        _fallo(donde, "tiene que ser un archivo .md: los demás archivos no se leen")
+    return ruta
 
 
 def _patron(valor, donde):
@@ -58,7 +67,7 @@ def _patron(valor, donde):
     for t in tramos:
         if t in ("*", "**"):
             continue
-        if t in ("", ".", "..") or _PROHIBIDO.search(t) or t != t.strip():
+        if t in ("", ".", "..") or _PROHIBIDO.search(t) or t != t.strip() or t.endswith("."):
             _fallo(donde, "la ruta %r no vale: tramos con nombre, * o **, sin .. ni barra inicial" % valor)
     return [t if t in ("*", "**") else t.casefold() for t in tramos]
 
@@ -95,7 +104,7 @@ def validar(d):
     if "orienta" not in d:
         _fallo(donde, 'falta "orienta": el archivo que orienta, con las reglas de base')
     for clave in ("orienta", "rutea", "funciones"):
-        f[clave] = ruta_relativa(d[clave], "%s.%s" % (donde, clave)) if clave in d else None
+        f[clave] = archivo_md(d[clave], "%s.%s" % (donde, clave)) if clave in d else None
     f["areas"] = f["eslabones"] = None
     if f["forma"] == "areas":
         if "eslabones" in d:
@@ -109,9 +118,9 @@ def validar(d):
             if clave not in a:
                 _fallo(da, 'falta "%s"' % clave)
         f["areas"] = {"carpeta": ruta_relativa(a["carpeta"], da + ".carpeta", punto=True),
-                      "reglas": ruta_relativa(a["reglas"], da + ".reglas"),
+                      "reglas": archivo_md(a["reglas"], da + ".reglas"),
                       "procedimientos": ruta_relativa(a["procedimientos"], da + ".procedimientos"),
-                      "documento": ruta_relativa(a["documento"], da + ".documento")}
+                      "documento": archivo_md(a["documento"], da + ".documento")}
         for clave in ("pasos", "lee", "deja"):
             f["areas"][clave] = _titulos(a, clave, da)
     else:
@@ -133,9 +142,7 @@ def validar(d):
             if ("versiones" in e) != ("indice" in e):
                 _fallo(de, '"versiones" e "indice" van juntos: sin índice no se sabe cuál es la vigente')
             if "indice" in e:
-                eslabon["indice"] = ruta_relativa(e["indice"], de + ".indice")
-                if not eslabon["indice"].lower().endswith(".md"):
-                    _fallo(de, "el índice es un archivo .md")
+                eslabon["indice"] = archivo_md(e["indice"], de + ".indice")
             for otro in f["eslabones"]:
                 if _dentro(eslabon["carpeta"], otro["carpeta"]):
                     _fallo(de, "las carpetas de los eslabones no pueden repetirse ni estar una dentro de otra")
