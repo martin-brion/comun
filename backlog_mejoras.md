@@ -15,6 +15,8 @@ Ideas de capacidad, workflow o herramientas que todavía no se construyen. Lo de
 | 5 | Media | atlas: un vínculo entre documentos lleva a su página | Hoy un vínculo de un documento a otro de la base se muestra como texto con su ruta | S `[SUPUESTO]` | idea | atlas del conocimiento |
 | 6 | Baja | atlas: versiones vigentes también en las áreas | El índice de vigentes se lee solo en los eslabones de una cadena | S `[SUPUESTO]` | idea | atlas del conocimiento |
 | 7 | Baja | atlas: podar la caché de resúmenes | La caché guarda resúmenes de archivos que ya no existen o cambiaron; no molesta, pero crece | S `[SUPUESTO]` | idea | atlas del conocimiento |
+| 8 | Media | vigia: avisos de los proyectos como señal que solo frena | Una versión retirada por un error grave o con una instrucción especial de actualización hoy no se ve: el registro y el escáner no la dicen | M `[SUPUESTO]` | idea | revisión independiente de vigia 0.5.0 |
+| 9 | Media | vigia: escáner en una hoja remota | El vigía observa una hoja por ssh pero no la escanea: sin escáner no hay urgencia ni KEV allí, salvo que el vigía corra en la hoja | M `[SUPUESTO]` | idea | revisión independiente de vigia 0.5.0 |
 
 Estados: `idea → en evaluación → aprobada → en curso → hecha / descartada`.
 
@@ -69,3 +71,23 @@ Estados: `idea → en evaluación → aprobada → en curso → hecha / descarta
 - **Problema:** `incorporar` suma y reemplaza, pero nunca saca.
 - **Propuesta:** un comando que deja en la caché solo los resúmenes vigentes de los archivos que existen.
 - **Plan:** mismo cuidado que `incorporar`: se escribe de una vez y dice cuántos sacó.
+
+### 8 · vigia: avisos de los proyectos como señal que solo frena
+
+- **Problema:** 0.5.0 dejó afuera las publicaciones de los proyectos como fuente: lo que se aplica sale del registro y la
+  seguridad del escáner y la lista KEV. Pero un proyecto puede retirar una versión por un error que corrompe datos, o
+  pedir un paso especial al actualizar, y ninguna de esas dos fuentes lo dice.
+- **Propuesta:** una fuente opcional por componente (las notas de versión de su repositorio) que, si una versión
+  candidata aparece retirada o con una instrucción especial, la frena y abre un incidente. Nunca habilita nada.
+- **Plan:** el contrato primero (qué palabras o marcas cuentan, y que una fuente caída es «desconocido» y no frena todo);
+  pruebas con publicaciones inventadas.
+
+### 9 · vigia: escáner en una hoja remota
+
+- **Problema:** el escáner corre donde corre el vigía. Una hoja leída por ssh queda sin vulnerabilidades, sin carril de
+  urgencia y sin incidentes de KEV.
+- **Propuesta:** que la hoja deje su resultado de escaneo con forma fija, firmado o por un comando forzado de solo
+  lectura, y que el vigía lo lea como lee la foto, con su vigencia. Mientras tanto, la salida documentada es correr un
+  vigía en cada hoja.
+- **Plan:** esquema del resultado y su vigencia en el contrato; pruebas con un resultado vencido, ilegible o de otra
+  imagen.
