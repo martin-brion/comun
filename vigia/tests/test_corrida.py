@@ -114,15 +114,12 @@ class Corrida(Base):
         self.assertTrue(all("propio" not in url for url, _ in self.red.pedidos))
 
     def test_dos_corridas_a_la_vez_no(self):
-        os.makedirs(self.cfg["estado_dir"], exist_ok=True)
-        candado = os.path.join(self.cfg["estado_dir"], "corrida.candado")
-        open(candado, "w").close()
-        os.utime(candado, (AHORA, AHORA))
+        otra = corrida.Candado(self.cfg["estado_dir"])               # otra corrida, viva
         with self.assertRaises(corrida.Ocupado):
             self.correr()
-        os.utime(candado, (AHORA - 3 * 3600, AHORA - 3 * 3600))        # el de una corrida que murió se toma
+        otra.soltar()                                                # terminó (o murió): el sistema la suelta
         self.correr()
-        self.assertFalse(os.path.exists(candado))
+        self.correr()                                                # y cada corrida suelta la suya
 
 
 class Escaner(Base):

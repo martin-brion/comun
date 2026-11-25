@@ -114,6 +114,7 @@ python -m vigia resumen --config vigia.json    # el de la última corrida
 python -m vigia aplicar --config vigia.json    # una pasada del ejecutor, en su ventana
 python -m vigia aplicar --config vigia.json --presente   # con el dueño mirando: estrena un tipo de acción
 python -m vigia salud --config vigia.json      # para un monitor de afuera: 0 bien, 4 si no corre o está en pausa de más
+python -m vigia resuelto --config vigia.json <incidente>   # una persona: «esto ya está», levanta el bloqueo
 python -m vigia foto                           # la foto de este servidor, en JSON
 ```
 
@@ -125,6 +126,9 @@ la próxima corrida después de cada reinicio (`verificar_servidor`). Con lo mí
 - `aplicar` todos los días dentro de la ventana de urgencia y en la ventana ordinaria; y una vez al arrancar el servidor,
   para resolver un reinicio que cortó al propio vigía;
 - `salud` desde un monitor que no vive en lo que el vigía vigila, con aviso si da distinto de cero.
+
+**Una hoja remota** (lector por ssh) se observa, pero su escáner no: el escáner corre donde corre el vigía. Para que una
+hoja tenga vulnerabilidades, urgencia y KEV, el vigía corre en la hoja misma, con su propia configuración.
 
 ## Configuración
 
@@ -150,7 +154,7 @@ la próxima corrida después de cada reinicio (`verificar_servidor`). Con lo mí
 | `espera_reinicio_s` | Cuánto se espera a que el servidor arranque de nuevo. De fábrica, 1200. |
 | `sistema_plazo_h` | Horas con parches de seguridad del sistema pendientes antes de avisar. De fábrica, 72. |
 | `pausa_max_dias` | Días con el archivo `PAUSA` antes de avisar. De fábrica, 7. |
-| `maquinas` | `{archivo, vigencia_s, esperadas: {nombre: {servidor, apagada}}}`: el censo de máquinas virtuales (CONTRATO §8). |
+| `maquinas` | `{archivo, vigencia_s, esperadas: {nombre: {servidor, apagada, sin_vigia}}}`: el censo de máquinas virtuales (CONTRATO §8). |
 | `repos` | Lista de `{nombre, servidor, local, remoto, rama}`: repositorios montados, por commit (CONTRATO §8). |
 
 La pieza `sistema` se declara como cualquier componente: `"sistema": {"nivel": "patch", "playbook": "reinicio"}`. De
@@ -168,7 +172,8 @@ y su limpieza, las fuentes con una red de mentira, el análisis, el estado entre
 el ejecutor contra un servidor de mentira: compuertas, intención antes del efecto, falla con vuelta atrás, vuelta atrás
 fallida, corte a mitad de camino sin repetir la acción, tope y un servidor por ventana; y el tipo `datos`: copia antes,
 restauración de esa copia exacta, copia fallida, restauración fallida y cortes durante la copia y la restauración.
-`tests/test_unico.py` cubre lo de 0.5.0: contenedor desde un ID, proyecto de compose, aviso de cierre y noticias, estreno
+`tests/test_unico.py` cubre lo de 0.5.0 (y, en `Revision`, `RecuperarTrasUnCorte` y `ReinicioRoto`, un caso por cada
+hallazgo de la revisión independiente): contenedor desde un ID, proyecto de compose, aviso de cierre y noticias, estreno
 pendiente y candidata trabada, urgencia (aplica sin madurar solo con el arreglo comprobado), reinicio (bien, sin volver,
 sin reiniciar, después de una falla, cortando al propio vigía), servidor sin medir, pausa de más, latido y salud,
 parches del sistema, censo de máquinas y repositorios.

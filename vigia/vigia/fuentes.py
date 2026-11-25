@@ -69,7 +69,7 @@ def _json(cuerpo):
 def docker_hub(repo, pedir=pedir):
     """Hasta 100 etiquetas, las más recientes: nombre, fecha de publicación y huellas (la del índice y las de cada
     plataforma). `hay_mas` dice que el repositorio tiene más etiquetas que las consultadas."""
-    if not _REPO.match(repo):
+    if not _REPO.fullmatch(repo):
         return _desconocido("repositorio inválido")
     try:
         estado, _, cuerpo = pedir(HUB.format(repo=repo))
@@ -78,12 +78,12 @@ def docker_hub(repo, pedir=pedir):
         datos = _json(cuerpo)
         etiquetas = []
         for t in datos["results"]:
-            if not isinstance(t.get("name"), str) or not _TAG.match(t["name"]):
+            if not isinstance(t.get("name"), str) or not _TAG.fullmatch(t["name"]):
                 continue
             huellas = {t.get("digest")} | {i.get("digest") for i in t.get("images") or [] if isinstance(i, dict)}
             etiquetas.append({"nombre": t["name"], "publicada": str(t.get("last_updated") or "")[:20] or None,
-                              "indice": t["digest"] if _DIGEST.match(str(t.get("digest"))) else None,
-                              "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.match(h))})
+                              "indice": t["digest"] if _DIGEST.fullmatch(str(t.get("digest"))) else None,
+                              "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.fullmatch(h))})
         return {"estado": "ok", "motivo": "", "etiquetas": etiquetas, "hay_mas": bool(datos.get("next"))}
     except FuenteError as e:
         return _desconocido(str(e))
@@ -93,7 +93,7 @@ def docker_hub(repo, pedir=pedir):
 
 def etiqueta_hub(repo, tag, pedir=pedir):
     """Fecha y huellas de una etiqueta puntual del índice público: {"publicada", "digests"} o None si no se pudo."""
-    if not _REPO.match(repo) or not _TAG.match(tag):
+    if not _REPO.fullmatch(repo) or not _TAG.fullmatch(tag):
         return None
     try:
         estado, _, cuerpo = pedir(f"https://hub.docker.com/v2/repositories/{repo}/tags/{tag}")
@@ -102,8 +102,8 @@ def etiqueta_hub(repo, tag, pedir=pedir):
         t = _json(cuerpo)
         huellas = {t.get("digest")} | {i.get("digest") for i in t.get("images") or [] if isinstance(i, dict)}
         return {"publicada": str(t.get("last_updated") or "")[:20] or None,
-                "indice": t["digest"] if _DIGEST.match(str(t.get("digest"))) else None,
-                "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.match(h))}
+                "indice": t["digest"] if _DIGEST.fullmatch(str(t.get("digest"))) else None,
+                "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.fullmatch(h))}
     except (FuenteError, TypeError, AttributeError):
         return None
 
@@ -133,7 +133,7 @@ def _con_token(url, repo, pedir, cabeceras=None):
 
 def registro_oci(registro, repo, pedir=pedir):
     """Las etiquetas de un repositorio en un registro OCI. No trae fechas ni huellas: se piden aparte, de la candidata."""
-    if not _HOST.match(registro) or not _REPO.match(repo):
+    if not _HOST.fullmatch(registro) or not _REPO.fullmatch(repo):
         return _desconocido("referencia inválida")
     try:
         url, nombres, paginas = f"https://{registro}/v2/{repo}/tags/list?n=1000", [], 0
@@ -141,10 +141,12 @@ def registro_oci(registro, repo, pedir=pedir):
             estado, cab, cuerpo, _ = _con_token(url, repo, pedir)
             if estado != 200:
                 return _desconocido(f"el registro respondió {estado}")
-            nombres += [t for t in (_json(cuerpo).get("tags") or []) if isinstance(t, str) and _TAG.match(t)]
+            nombres += [t for t in (_json(cuerpo).get("tags") or []) if isinstance(t, str) and _TAG.fullmatch(t)]
             paginas += 1
             m = re.search(r'<([^>]+)>;\s*rel="next"', cab.get("link", ""))
             url = urllib.parse.urljoin(f"https://{registro}/", m.group(1)) if m else None
+            if url and urllib.parse.urlsplit(url).netloc != registro:
+                return _desconocido("la paginación lleva a otro servidor")
         return {"estado": "ok", "motivo": "", "hay_mas": bool(url),
                 "etiquetas": [{"nombre": n, "publicada": None, "indice": None, "digests": []} for n in nombres]}
     except FuenteError as e:
@@ -155,7 +157,7 @@ def registro_oci(registro, repo, pedir=pedir):
 
 def detalle_oci(registro, repo, tag, pedir=pedir):
     """Fecha de creación y huella de una etiqueta de un registro OCI: {"publicada", "digests"} o None si no se pudo."""
-    if not _HOST.match(registro) or not _REPO.match(repo) or not _TAG.match(tag):
+    if not _HOST.fullmatch(registro) or not _REPO.fullmatch(repo) or not _TAG.fullmatch(tag):
         return None
     try:
         base = f"https://{registro}/v2/{repo}"
@@ -169,7 +171,7 @@ def detalle_oci(registro, repo, tag, pedir=pedir):
             elegido = next((m for m in manifiesto["manifests"]
                             if (m.get("platform") or {}).get("os") == "linux"
                             and (m.get("platform") or {}).get("architecture") == "amd64"), None)
-            if elegido is None or not _DIGEST.match(str(elegido.get("digest"))):
+            if elegido is None or not _DIGEST.fullmatch(str(elegido.get("digest"))):
                 return None
             huellas.add(elegido["digest"])
             estado, _, cuerpo = pedir(f"{base}/manifests/{elegido['digest']}", {"Accept": _MANIFIESTOS, **(auth or {})})
@@ -177,15 +179,15 @@ def detalle_oci(registro, repo, tag, pedir=pedir):
                 return None
             manifiesto = _json(cuerpo)
         config = str((manifiesto.get("config") or {}).get("digest"))
-        if not _DIGEST.match(config):
+        if not _DIGEST.fullmatch(config):
             return None
         estado, _, cuerpo = pedir(f"{base}/blobs/{config}", auth)
         if estado != 200:
             return None
         creada = _json(cuerpo).get("created")
         return {"publicada": creada[:20] if isinstance(creada, str) else None,
-                "indice": indice if isinstance(indice, str) and _DIGEST.match(indice) else None,
-                "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.match(h))}
+                "indice": indice if isinstance(indice, str) and _DIGEST.fullmatch(indice) else None,
+                "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.fullmatch(h))}
     except (FuenteError, TypeError, AttributeError):
         return None
 

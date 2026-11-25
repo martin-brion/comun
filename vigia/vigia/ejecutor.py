@@ -61,7 +61,7 @@ def accion(cfg, servidor, nombre, valores, correr, tope=900):
     if plantilla is None:
         return None
     for campo in set(_config.ACCIONES[nombre]) | _huecos(plantilla):
-        if not isinstance(valores.get(campo), str) or not _PATRON[campo].match(valores[campo]):
+        if not isinstance(valores.get(campo), str) or not _PATRON[campo].fullmatch(valores[campo]):
             return False
     return correr([x.format(**valores) for x in plantilla], tope) == 0
 
@@ -91,7 +91,7 @@ def _servicios(pieza, todos=None, con_proyecto=False):
     pares = [tuple(s.split("/", 1)) for s in pieza["servicios"]]
     if not pares or len(pares) != len(pieza["contenedores"]):
         return None
-    if not all(_PROYECTO.match(p) and _SERVICIO.match(s) for p, s in pares):
+    if not all(_PROYECTO.fullmatch(p) and _SERVICIO.fullmatch(s) for p, s in pares):
         return None
     nombres = [s for _, s in pares]
     if len(set(nombres)) != len(nombres) and not con_proyecto:
@@ -138,9 +138,9 @@ def compuertas(cfg, db, servidor, pieza, presente, correr, todos=None, comprobar
                   "se sabe cuándo arrancó" if pieza.get("arrancado") else "no se sabe cuándo arrancó el servidor: no se "
                   "podría comprobar el reinicio"))
     else:
-        g.append(("imagen fija", bool(c.get("referencia")) and bool(_FIJA.match(c["referencia"])),
+        g.append(("imagen fija", bool(c.get("referencia")) and bool(_FIJA.fullmatch(c["referencia"])),
                   "con huella" if c.get("referencia") else "no se conoce la huella de la versión propuesta"))
-        g.append(("vuelta atrás", bool(c.get("anterior")) and bool(_FIJA.match(c["anterior"])),
+        g.append(("vuelta atrás", bool(c.get("anterior")) and bool(_FIJA.fullmatch(c["anterior"])),
                   "con la referencia exacta de hoy" if c.get("anterior") else "no se conoce la huella de la imagen de hoy"))
         pares = _servicios(pieza, todos, _con_proyecto(cfg, servidor, playbook))
         g.append(("servicios", pares is not None, "de compose" if pares else
@@ -221,7 +221,7 @@ def _volver(cfg, db, servidor, c, par, tomar, correr, reloj, dormir, playbook=No
         vuelta = accion(cfg, nombre, "volver_propia", _valores(par, base=c["anterior"]), correr) is True
     else:
         vuelta = accion(cfg, nombre, "volver_imagen", _valores(par, referencia=c["anterior"]), correr) is True
-    vuelta = vuelta and _sano(cfg, servidor, servicio, _FIJA.match(c["anterior"]).group(1), tomar, reloj, dormir,
+    vuelta = vuelta and _sano(cfg, servidor, servicio, _FIJA.fullmatch(c["anterior"]).group(1), tomar, reloj, dormir,
                               _medida(playbook, c.get("version")), proyecto)
     vuelta = vuelta and accion(cfg, nombre, "verificar", _valores(par), correr) is True
     estado.resultado(db, m, "hecho" if vuelta else "fallo", "", int(reloj()))
@@ -350,10 +350,8 @@ def _recuperar_reinicio(cfg, db, e, servidor, tomar, reloj, correr):
         if reciente:
             return "espera"
         estado.resultado(db, e["n"], "ambiguo", "tras pedir el reinicio no se pudo volver a medir el servidor", ahora)
-        estado.pasar(db, e["candidata"], "escalada", "no se pudo medir después de pedir el reinicio", ahora)
-        estado.incidente(db, f"ambiguo-{e['candidata']}", "a medias",
-                         f"Se pidió reiniciar {e['servidor']} y desde entonces no se lo pudo medir: puede no haber "
-                         "vuelto. No se aplica nada más ahí hasta revisarlo.", ahora)
+        escalar(db, e["candidata"], e["servidor"], f"ambiguo-{e['candidata']}", "a medias",
+                f"Se pidió reiniciar {e['servidor']} y desde entonces no se lo pudo medir: puede no haber vuelto.", ahora)
         return "ambiguo"
     if arranque <= e["datos"]["arrancado"]:
         if reciente:
@@ -372,64 +370,151 @@ def _recuperar_reinicio(cfg, db, e, servidor, tomar, reloj, correr):
     if ahora - arranque < cfg["espera_salud_s"] + 300:
         return "espera"
     estado.resultado(db, e["n"], "fallo", "reinició, pero no volvió todo o no verificó", ahora)
-    estado.pasar(db, e["candidata"], "escalada", "reinició y no volvió todo", ahora)
-    estado.incidente(db, f"roto-{e['candidata']}", "reinicio incompleto",
-                     f"{e['servidor']} reinició, pero no volvieron todos los servicios que corrían antes o no pasó "
-                     "`verificar_servidor`. No tiene vuelta atrás: revisarlo. No se aplica nada más ahí.", ahora)
+    escalar(db, e["candidata"], e["servidor"], f"roto-{e['candidata']}", "reinicio incompleto",
+            f"{e['servidor']} reinició, pero no volvieron todos los servicios que corrían antes o no pasó "
+            "`verificar_servidor`. No tiene vuelta atrás: revisarlo.", ahora)
     return "ambiguo"
 
 
+RESUELTO = (" Cuando esté resuelto, decírselo al vigía: `python -m vigia resuelto --config <configuración> {id}`; hasta "
+            "entonces no aplica nada más en ese servidor.")
+
+
+def escalar(db, candidata_id, servidor, incidente, clase, texto, ahora):
+    """Una candidata que espera a una persona, con su incidente, y el servidor bloqueado hasta que se resuelva."""
+    estado.pasar(db, candidata_id, "escalada", clase, ahora)
+    estado.incidente(db, incidente, clase, texto + RESUELTO.format(id=incidente), ahora)
+    estado.bloquear(db, servidor, incidente, ahora)
+
+
+def _como_corre(cfg, servidor, par, de, a, medir, tomar, reloj):
+    """«a» si el servicio corre sano lo nuevo, «de» si corre sano lo de antes, None si otra cosa o no se pudo medir."""
+    proyecto, servicio = par
+    foto, suyos = _mide(cfg, servidor, servicio, tomar, reloj, proyecto) if servidor else (None, None)
+    if foto is None or not suyos or not all(c["estado"] == "running" and c["salud"] in ("healthy", "") for c in suyos):
+        return None
+    for nombre, huella in (("a", a), ("de", de)):
+        if huella and all(huella in medir(foto, c) for c in suyos):
+            return nombre
+    return None
+
+
+def _recuperar_intento(cfg, db, it, servidor, tomar, reloj, correr):
+    """Decide cómo quedó un intento que un corte dejó abierto, con todos sus pasos ya medidos. Lo nuevo corriendo no
+    alcanza: se verifica. Si no se puede acreditar ni lo nuevo ni lo de antes en todos sus servicios, escala."""
+    ahora = int(reloj())
+    d, cid = it["datos"], it["candidata"]
+    medir = _medida(d.get("tipo"), d.get("version"))
+    de, a = (_FIJA.fullmatch(d.get(k) or "") for k in ("de", "a"))
+    pares = [tuple(x) for x in d["pares"]]
+    como = [_como_corre(cfg, servidor, par, de and de.group(1), a and a.group(1), medir, tomar, reloj) for par in pares]
+    if como and all(x == "de" for x in como):
+        fallas = any(e["candidata"] == cid and e["n"] > it["paso_desde"] and e["resultado"] == "fallo"
+                     for e in estado.diario(db))
+        estado.cerrar_intento(db, it["n"], "no aplicado", ahora)
+        estado.pasar(db, cid, "esperando" if fallas else "detectada",
+                     "un intento falló y se volvió atrás" if fallas else "", ahora)
+        return True
+    if como and all(x == "a" for x in como) and all(
+            accion(cfg, servidor["nombre"], "verificar", _valores(par), correr) is True for par in pares):
+        estado.cerrar_intento(db, it["n"], "hecho", ahora)
+        estado.pasar(db, cid, "cerrada", "aplicada por el vigía y verificada (resuelto tras un corte)", ahora)
+        estado.estrenar(db, d.get("tipo"), cid, ahora)
+        for prefijo in ("estreno-" + str(d.get("tipo")), f"fallo-{cid}", f"plazo-{cid}", f"trabada-{cid}"):
+            estado.cerrar_incidente(db, prefijo, ahora)
+        return True
+    estado.cerrar_intento(db, it["n"], "ambiguo", ahora)
+    copia = next((f" Su copia de ese intento lleva la marca {e['datos']['marca']}." for e in estado.diario(db)
+                  if e["candidata"] == cid and e["n"] > it["paso_desde"] and e["datos"].get("marca")), "")
+    escalar(db, cid, it["servidor"], f"ambiguo-{cid}", "a medias",
+            f"En {it['servidor']}, un intento sobre {', '.join(s for _, s in pares)} quedó a medias tras un corte: no se "
+            f"pudo acreditar que corra sano y verificado lo nuevo ni lo de antes; puede estar detenido.{copia}", ahora)
+    return False
+
+
 def recuperar(cfg, db, tomar, reloj, correr=_correr):
-    """Resuelve lo que un corte dejó a medias, midiendo. No corre ninguna acción que cambie algo (solo
-    `verificar_servidor`, que comprueba). Devuelve los servidores donde esta pasada no aplica nada: los que quedaron con
-    algo ambiguo (hasta que lo vea una persona) y los que todavía están volviendo de un reinicio."""
-    ambiguos = set()
+    """Resuelve lo que un corte dejó a medias, midiendo. No corre ninguna acción que cambie algo (solo `verificar` y
+    `verificar_servidor`, que comprueban). Primero mide cada paso que quedó abierto; después decide cada intento abierto
+    (también los que el corte dejó entre dos pasos). Devuelve los servidores donde esta pasada no aplica nada: los
+    bloqueados hasta que una persona diga que está resuelto, y los que todavía están volviendo de un reinicio."""
+    esperan = set()
     por_nombre = {s["nombre"]: s for s in cfg["servidores"]}
+    intentos = {it["candidata"]: it for it in estado.intentos_abiertos(db)}
+    for it in intentos.values():
+        it["paso_desde"] = max((e["n"] for e in estado.diario(db) if e["candidata"] == it["candidata"]
+                                and e["abierta"] < it["abierto"]), default=0)
     for e in estado.a_medias(db):
         ahora = int(reloj())
         servidor = por_nombre.get(e["servidor"])
         if e["paso"] == "reiniciar":
             if _recuperar_reinicio(cfg, db, e, servidor, tomar, reloj, correr) != "resuelto":
-                ambiguos.add(e["servidor"])
+                esperan.add(e["servidor"])
             continue
+        envuelto = e["candidata"] in intentos
         proyecto = e["datos"].get("proyecto")
         foto, suyos = _mide(cfg, servidor, e["datos"]["servicio"], tomar, reloj, proyecto) if servidor else (None, None)
         medir = _medida(e["datos"].get("tipo"), e["datos"].get("version"))
         huellas = [medir(foto, c) for c in suyos] if suyos else []
 
         def todos(clave):
-            fija = _FIJA.match(e["datos"].get(clave) or "")
+            fija = _FIJA.fullmatch(e["datos"].get(clave) or "")
             return bool(fija) and bool(huellas) and all(fija.group(1) in h for h in huellas)
+
+        def seguir(nuevo, motivo=""):
+            # Con un intento abierto, lo decide el intento entero, después.
+            if not envuelto:
+                estado.pasar(db, e["candidata"], nuevo, motivo, ahora)
         if e["paso"] == "construir" and todos("de"):
             # El armado no toca lo que corre: si sigue lo de siempre, no pasó nada.
             estado.resultado(db, e["n"], "no aplicado", "recuperado tras un corte: el armado no terminó y seguía lo de "
                              "siempre", ahora)
-            estado.pasar(db, e["candidata"], "detectada", "", ahora)
+            seguir("detectada")
         elif e["paso"] == "respaldar" and todos("de"):
             # La copia no terminó, pero el servicio corre con lo de siempre: sus datos no se tocaron.
             estado.resultado(db, e["n"], "no aplicado", "recuperado tras un corte: la copia no terminó y seguía la versión "
                              "anterior", ahora)
-            estado.pasar(db, e["candidata"], "detectada", "", ahora)
-        elif e["paso"] == "aplicar" and todos("a"):
+            seguir("detectada")
+        elif e["paso"] == "aplicar" and todos("a") and (envuelto or accion(
+                cfg, e["servidor"], "verificar", {"servicio": e["datos"]["servicio"], "proyecto": proyecto or "x"},
+                correr) is True):
             estado.resultado(db, e["n"], "hecho", "recuperado tras un corte: ya corría la versión nueva", ahora)
-            estado.pasar(db, e["candidata"], "detectada", "", ahora)
+            seguir("detectada")
         elif e["paso"] == "aplicar" and todos("de"):
             estado.resultado(db, e["n"], "no aplicado", "recuperado tras un corte: seguía la versión anterior", ahora)
-            estado.pasar(db, e["candidata"], "detectada", "", ahora)
+            seguir("detectada")
         elif e["paso"] == "volver" and todos("a"):
             estado.resultado(db, e["n"], "hecho", "recuperado tras un corte: ya había vuelto", ahora)
-            estado.pasar(db, e["candidata"], "esperando", "un intento falló y se volvió atrás", ahora)
+            seguir("esperando", "un intento falló y se volvió atrás")
         else:
             # Una restauración a medias cae siempre acá: cómo quedaron los datos no se puede medir desde afuera.
             estado.resultado(db, e["n"], "ambiguo", "tras un corte no se pudo saber cómo quedó", ahora)
-            estado.pasar(db, e["candidata"], "escalada", "quedó a medias tras un corte", ahora)
+            if envuelto:
+                estado.cerrar_intento(db, intentos.pop(e["candidata"])["n"], "ambiguo", ahora)
             copia = f" Su copia de ese intento lleva la marca {e['datos']['marca']}." if e["datos"].get("marca") else ""
-            estado.incidente(db, f"ambiguo-{e['candidata']}", "a medias",
-                             f"En {e['servidor']}, el servicio {e['datos']['servicio']} quedó a medias tras un corte "
-                             f"(paso: {e['paso']}) y no se pudo saber cómo quedó; puede estar detenido.{copia} No se "
-                             "aplica nada más ahí hasta revisarlo.", ahora)
-            ambiguos.add(e["servidor"])
-    return ambiguos
+            escalar(db, e["candidata"], e["servidor"], f"ambiguo-{e['candidata']}", "a medias",
+                    f"En {e['servidor']}, el servicio {e['datos']['servicio']} quedó a medias tras un corte "
+                    f"(paso: {e['paso']}) y no se pudo saber cómo quedó; puede estar detenido.{copia}", ahora)
+    for it in intentos.values():
+        _recuperar_intento(cfg, db, it, por_nombre.get(it["servidor"]), tomar, reloj, correr)
+    return esperan | estado.bloqueados(db)
+
+
+def resuelto(cfg, incidente, ahora):
+    """Una persona dice que un incidente está resuelto: se cierra, se levanta el bloqueo del servidor y su candidata,
+    si estaba escalada, vuelve a quedar a la vista del vigía. False si no había un incidente abierto con ese nombre."""
+    db = estado.abrir(cfg["estado_dir"])
+    try:
+        if not estado.abierto(db, incidente):
+            return False
+        estado.cerrar_incidente(db, incidente, ahora)
+        estado.desbloquear_incidente(db, incidente)
+        cid = incidente.split("-", 1)[1] if "-" in incidente else ""
+        fila = estado.candidata(db, cid)
+        if fila and fila["estado"] == "escalada":
+            estado.pasar(db, cid, "detectada", "resuelto por una persona", ahora)
+        return True
+    finally:
+        db.close()
 
 
 def _elegir(cfg, db, fecha):
@@ -497,7 +582,8 @@ def aplicar(cfg, presente=False, tomar=censo.tomar, pedir=fuentes.pedir, escanea
                 return acta
             if servidor["nombre"] in ambiguos:
                 acta["servidor"] = servidor["nombre"]
-                acta["motivo"] = "algo quedó a medias tras un corte o un reinicio todavía se está resolviendo"
+                acta["motivo"] = ("espera a una persona (algo quedó roto o a medias) o un reinicio todavía se está "
+                                  "resolviendo")
                 return acta
             observado = corrida._correr(cfg, ahora, tomar, pedir, escanear, True)
         else:
@@ -515,6 +601,9 @@ def aplicar(cfg, presente=False, tomar=censo.tomar, pedir=fuentes.pedir, escanea
         acta["servidor"] = servidor["nombre"]
         medido = next(s for s in observado["servidores"] if s["nombre"] == servidor["nombre"])
         if medido["estado"] != "ok" or medido["piezas"] is None:
+            # Toma igual su turno: si no, un servidor caído sería siempre «el que hace más que no tiene ventana» y los
+            # demás no tendrían nunca la suya.
+            estado.tomar_ventana(db, clave, servidor["nombre"])
             acta["motivo"] = "no se pudo medir el servidor"
             return acta
         estado.tomar_ventana(db, clave, servidor["nombre"])
@@ -545,11 +634,15 @@ def aplicar(cfg, presente=False, tomar=censo.tomar, pedir=fuentes.pedir, escanea
                 continue
             urgencia = _arreglo(c)
             estado.pasar(db, c["id"], "aplicando", "", int(reloj()))
-            resultado, hechos = "hecho", []
+            resultado, hechos, intento = "hecho", [], None
             if pieza.get("sistema"):
                 resultado = _reiniciar(cfg, db, servidor, c, tomar, correr, reloj, dormir)
             else:
-                for par in _servicios(pieza, todos, _con_proyecto(cfg, servidor["nombre"], pieza["playbook"])):
+                pares = _servicios(pieza, todos, _con_proyecto(cfg, servidor["nombre"], pieza["playbook"]))
+                intento = estado.abrir_intento(db, c["id"], servidor["nombre"], {
+                    "tipo": pieza["playbook"], "pares": [list(x) for x in pares], "de": c["anterior"],
+                    "a": c["referencia"], "version": c.get("version")}, int(reloj()))
+                for par in pares:
                     resultado = _aplicar_servicio(cfg, db, servidor, c, par, pieza["playbook"], tomar, correr, reloj,
                                                   dormir)
                     if resultado != "hecho":
@@ -564,6 +657,8 @@ def aplicar(cfg, presente=False, tomar=censo.tomar, pedir=fuentes.pedir, escanea
                     if _volver(cfg, db, servidor, c, par, tomar, correr, reloj, dormir, pieza["playbook"]) != "vuelto":
                         resultado = "roto"
             ahora = int(reloj())
+            if intento:
+                estado.cerrar_intento(db, intento, "hecho" if resultado == "hecho" else resultado, ahora)
             if resultado == "hecho":
                 paso["resultado"] = "aplicada"
                 estado.pasar(db, c["id"], "cerrada", "aplicada por el vigía y verificada", ahora)
@@ -595,24 +690,22 @@ def aplicar(cfg, presente=False, tomar=censo.tomar, pedir=fuentes.pedir, escanea
                     estado.pasar(db, c["id"], "esperando", "un intento falló y se volvió atrás", ahora)
             elif resultado == "a medias":
                 paso["resultado"] = "falló a medias"
-                estado.pasar(db, c["id"], "escalada", "falló en un servicio después de cambiar otro", ahora)
-                estado.incidente(db, f"roto-{c['id']}", "a medias",
-                                 f"En {servidor['nombre']}, {pieza['pieza']} {c['actual']} → {c['propuesta']} cambió en "
-                                 f"{', '.join(s for _, s in hechos)} y falló en el siguiente, que quedó como estaba. Con "
-                                 "datos no se vuelve atrás a ciegas: revisarlo. El vigía frenó la ventana.", ahora)
+                escalar(db, c["id"], servidor["nombre"], f"roto-{c['id']}", "a medias",
+                        f"En {servidor['nombre']}, {pieza['pieza']} {c['actual']} → {c['propuesta']} cambió en "
+                        f"{', '.join(s for _, s in hechos)} y falló en el siguiente, que quedó como estaba. Con "
+                        "datos no se vuelve atrás a ciegas: revisarlo.", ahora)
                 acta["motivo"] = "se frenó la ventana: una pieza quedó a medias"
                 break
             else:
                 paso["resultado"] = ("el reinicio no volvió bien" if pieza.get("sistema")
                                      else "falló y la vuelta atrás también")
-                estado.pasar(db, c["id"], "escalada", paso["resultado"], ahora)
                 texto = (f"{servidor['nombre']} no volvió bien del reinicio: no respondió, o no volvieron todos los "
                          "servicios que corrían antes, o no pasó `verificar_servidor`. No tiene vuelta atrás: revisarlo."
                          if pieza.get("sistema") else
                          f"En {servidor['nombre']}, {pieza['pieza']} {c['actual']} → {c['propuesta']} falló y la "
                          "vuelta atrás tampoco verificó. El servicio puede estar caído.")
-                estado.incidente(db, f"roto-{c['id']}", "reinicio incompleto" if pieza.get("sistema")
-                                 else "vuelta atrás fallida", texto + " El vigía frenó la ventana.", ahora)
+                escalar(db, c["id"], servidor["nombre"], f"roto-{c['id']}", "reinicio incompleto" if pieza.get("sistema")
+                        else "vuelta atrás fallida", texto, ahora)
                 acta["motivo"] = "se frenó la ventana: " + paso["resultado"]
                 break
         return acta
@@ -623,10 +716,7 @@ def aplicar(cfg, presente=False, tomar=censo.tomar, pedir=fuentes.pedir, escanea
             corrida.latido(cfg, "ejecutor", int(reloj()))
         finally:
             db.close()
-            try:
-                os.unlink(candado)
-            except OSError:
-                pass
+            candado.soltar()
 
 
 def _seguimiento_en(db, servidor, pieza, compuertas_, fecha, reloj):

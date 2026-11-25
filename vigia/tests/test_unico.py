@@ -3,6 +3,7 @@ ID, el proyecto de compose y el aviso del cierre), el carril de urgencia, el rei
 queda trabado, el latido para un monitor de afuera, el censo de máquinas virtuales y los repositorios montados."""
 import json
 import os
+import re
 import tempfile
 import time
 import unittest
@@ -82,6 +83,7 @@ class Unico(Base):
 
     def aplicar(self, presente=False, cfg=None, s=None, escanear=None):
         s = s or self.s
+        datos.kev(self.red)
         return ejecutor.aplicar(cfg or self.cfg, presente=presente, tomar=s.tomar, pedir=self.red, correr=s.correr,
                                 reloj=self.reloj, dormir=lambda n: setattr(self, "ahora", self.ahora + n),
                                 local=time.gmtime, escanear=escanear or (lambda *a: {}))
@@ -258,6 +260,34 @@ class NadaTrabadoEnSilencio(Unico):
         self.assertNotIn("trabada", self.incidentes().values())
 
 
+class Turnos(Unico):
+    def test_un_parche_maduro_no_espera_al_siguiente_recien_salido(self):
+        self.red.hub("library/postgres", [tag("16.17", RECIENTE, H3), tag("16.16", VIEJA, H2), tag("16.15", VIEJA, H)])
+        acta = self.aplicar(presente=True)
+        self.assertEqual((acta["pasos"][0]["a"], acta["pasos"][0]["resultado"]), ("16.16", "aplicada"))
+
+    def test_la_candidata_que_reemplaza_a_otra_hereda_su_fecha(self):
+        corrida.correr(self.cfg, AHORA, tomar=self.s.tomar, pedir=datos.kev(self.red))
+        self.red.hub("library/postgres", [tag("16.17", VIEJA, H3), tag("16.16", VIEJA, H2), tag("16.15", VIEJA, H)])
+        corrida.correr(self.cfg, AHORA + 5 * DIA, tomar=self.s.tomar, pedir=self.red)
+        self.assertEqual(self.candidata("16.17")["detectada"], AHORA)
+
+    def test_un_servidor_que_no_se_mide_no_le_quita_la_ventana_a_los_demas(self):
+        cfg = self.config(servidores=[{"nombre": "caido"}, {"nombre": "principal"}],
+                          acciones={"caido": ACCIONES, "principal": ACCIONES})
+        caido, sano = Maquina({"db": f"postgres:16.15@{H}"}), self.s
+        caido.medible = False
+
+        def tomar(servidor, ahora, vigencia):
+            return (caido if servidor["nombre"] == "caido" else sano).tomar(servidor, ahora, vigencia)
+        datos.kev(self.red)
+        for semana in range(2):
+            self.ahora = AHORA + semana * 7 * DIA
+            acta = ejecutor.aplicar(cfg, presente=True, tomar=tomar, pedir=self.red, correr=sano.correr, reloj=self.reloj,
+                                    dormir=lambda n: None, local=time.gmtime, escanear=lambda *a: {})
+        self.assertEqual((acta["servidor"], acta["pasos"][0]["resultado"]), ("principal", "aplicada"))
+
+
 class Urgencia(Unico):
     """Un KEV con arreglo en algo expuesto: no espera la maduración y entra en la ventana de urgencia, después de
     comprobar con el escáner que la versión propuesta ya no lo tiene."""
@@ -393,17 +423,20 @@ class Reinicio(Unico):
         (paso,) = self.aplicar(presente=True)["pasos"]
         self.assertEqual([n for n, ok, _ in paso["compuertas"] if not ok], ["arranque medible"])
 
-    def test_el_candado_de_un_arranque_anterior_se_toma(self):
-        d, ahora = os.path.join(self.tmp.name, "c"), int(time.time())
-        corrida._candado(d, ahora, arranque=lambda: "arranque-1")
+    def test_el_candado_no_vence_por_tiempo_mientras_su_dueno_vive(self):
+        d = os.path.join(self.tmp.name, "c")
+        primero = corrida.Candado(d)
+        os.utime(os.path.join(d, "corrida.candado"), (AHORA - 30 * DIA, AHORA - 30 * DIA))
         with self.assertRaises(corrida.Ocupado):
-            corrida._candado(d, ahora, arranque=lambda: "arranque-1")
-        corrida._candado(d, ahora, arranque=lambda: "arranque-2")
+            corrida.Candado(d)
+        primero.soltar()
+        corrida.Candado(d).soltar()
 
 
 class Observar(Unico):
     def correr(self, ahora=None, **k):
         k.setdefault("escanear", lambda *a: {})
+        datos.kev(self.red)
         return corrida.correr(self.cfg, ahora or self.ahora, tomar=self.s.tomar, pedir=self.red, **k)
 
     def test_un_servidor_sin_medir_un_dia_se_avisa_y_se_cierra_al_volver(self):
@@ -429,13 +462,23 @@ class Observar(Unico):
         self.assertEqual(self.incidentes(), {})
 
     def test_el_latido_y_la_salud(self):
-        cfg = self.cfg
+        cfg = self.cfg = self.config(ventana=None)
         self.assertEqual(corrida.salud(cfg, AHORA, 26)[0], 4)
         self.correr()
         self.assertEqual(corrida.salud(cfg, AHORA + 3600, 26), (0, "vigía: bien · incidentes abiertos: 0"))
         codigo, texto = corrida.salud(cfg, AHORA + 27 * 3600, 26)
         self.assertEqual(codigo, 4)
         self.assertIn("la última corrida fue hace 27 h", texto)
+
+    def test_la_salud_mira_tambien_al_ejecutor(self):
+        self.correr()
+        self.assertEqual(corrida.salud(self.cfg, AHORA + 60, 26),
+                         (4, "vigía: el ejecutor no registró ninguna pasada · incidentes abiertos: 0"))
+        self.aplicar()
+        self.assertEqual(corrida.salud(self.cfg, self.ahora + 60, 26)[0], 0)
+        codigo, texto = corrida.salud(self.cfg, self.ahora + 9 * DIA, 26)
+        self.assertEqual(codigo, 4)
+        self.assertIn("la última pasada del ejecutor", texto)
 
     def test_la_pieza_del_sistema_propone_el_reinicio_con_su_plazo(self):
         self.s.pide_reinicio = True
@@ -480,6 +523,14 @@ class Maquinas(unittest.TestCase):
                          ["maquina-detenida-vm-b", "maquina-sin-vigia-vm-x"])
         c = self.censo([{"nombre": "vm-a", "estado": "corriendo"}])
         self.assertIn("maquina-ausente-vm-b", [i for i, _, _ in maquinas.hallazgos(self.m, c)])
+
+    def test_declarada_sin_servidor_que_corre_es_sin_vigia_salvo_a_proposito(self):
+        c = self.censo([{"nombre": "vm-a", "estado": "corriendo"}, {"nombre": "vm-b", "estado": "corriendo"},
+                        {"nombre": "vm-c", "estado": "apagada"}])
+        self.assertEqual([i for i, _, _ in maquinas.hallazgos(self.m, c)], ["maquina-sin-vigia-vm-b"])
+        m = config.validar(datos.config(self.tmp.name, maquinas={"archivo": self.ruta, "esperadas": {
+            "vm-a": {"servidor": "principal"}, "vm-b": {"sin_vigia": True}, "vm-c": {"apagada": True}}}))["maquinas"]
+        self.assertEqual(maquinas.hallazgos(m, c), [])
 
     def test_un_censo_vencido_o_roto_es_desconocido(self):
         self.assertEqual(self.censo([], tomada=AHORA - 7200)["estado"], "desconocido")
@@ -528,6 +579,214 @@ class Repos(unittest.TestCase):
             config.validar(datos.config(tempfile.mkdtemp(), repos=[{"nombre": "x", "servidor": "principal",
                                                                      "local": ["a"], "remoto": "http://x.test/r",
                                                                      "rama": "18.0"}]))
+
+
+class Revision(Unico):
+    """Un caso por cada hallazgo de la revisión independiente (Codex), con el número del hallazgo."""
+
+    def correr(self, ahora=None, **k):
+        k.setdefault("escanear", lambda *a: {})
+        datos.kev(self.red)
+        return corrida.correr(self.cfg, ahora or self.ahora, tomar=self.s.tomar, pedir=self.red, **k)
+
+    # 1
+    def test_un_salto_de_linea_no_pasa_por_un_hueco_ni_por_la_foto(self):
+        cfg = self.config(acciones={"principal": dict(ACCIONES, verificar=["a", "{proyecto}", "{servicio}"])})
+        self.assertFalse(ejecutor.accion(cfg, "principal", "verificar", {"servicio": "web", "proyecto": "pila\n"},
+                                         lambda a, t: 0))
+        cruda = datos.foto([("db", "postgres:16.15", 1)])
+        cruda["contenedores"][0]["proyecto"] = "pila\n"
+        with self.assertRaises(censo.FotoError):
+            censo.limpiar(cruda, AHORA, 900)
+
+    # 6
+    def test_una_flotante_sin_version_conocida_no_se_aplica_sola(self):
+        foto = censo.limpiar(datos.foto([("db", "postgres:latest", 1)], {1: {"digests": [f"postgres@{H}"]}}), AHORA, 900)
+        red = Red().hub("library/postgres", [tag("latest", VIEJA, H2), tag("17.2", VIEJA, H2)])
+        (p,) = analisis.piezas(self.cfg, "principal", foto, lambda t, r, repo: fuentes.docker_hub(repo, red), None,
+                               AHORA)[:-1]
+        self.assertTrue(p["candidata"]["compuerta_version"].startswith("fuera: no se sabe qué versión corre"))
+
+    # 7
+    def test_un_contenedor_sin_referencia_cuenta_para_la_ambiguedad(self):
+        self.s = Maquina({"uno-web": f"postgres:16.15@{H}", "dos-web": "sha256:" + "c" * 64},
+                         {"uno-web": ("uno", "web"), "dos-web": ("dos", "web")})
+        (paso,) = self.aplicar(presente=True)["pasos"]
+        self.assertEqual([n for n, ok, _ in paso["compuertas"] if not ok], ["servicios"])
+
+    # 8
+    def test_un_escaneo_vacio_no_es_cero_y_no_se_recortan_los_kev(self):
+        r = escaner.escanear(["escaner"], ["x"], set(), 60, correr=lambda a, t: (0, b"{}"))
+        self.assertEqual(r["x"]["estado"], "desconocido")
+        muchos = {"Results": [{"Vulnerabilities": [{"VulnerabilityID": f"CVE-2099-{i:04d}", "FixedVersion": "1"}
+                                                   for i in range(60)]}]}
+        r = escaner.resumir(muchos, {f"CVE-2099-{i:04d}" for i in range(60)})
+        self.assertIn("CVE-2099-0059", r["kev"])
+
+    # 10
+    def test_en_un_registro_oci_la_maduracion_cuenta_desde_que_se_vio(self):
+        from test_fuentes import registro
+        self.cfg = self.config(componentes={"registro.ejemplo.test/equipo/forja": {"nivel": "patch"}})
+        self.s = Maquina({"forja": f"registro.ejemplo.test/equipo/forja:15.0.9-rootless@{H}"})
+        self.red = registro(["15.0.9-rootless", "15.0.11-rootless"])
+        r = self.correr()
+        forja = next(p for p in r["servidores"][0]["piezas"] if "forja" in p["pieza"])
+        self.assertEqual(forja["candidata"]["compuerta_version"], "espera: madura el 2027-01-22")
+
+    # 11 y 13
+    def test_un_escaneo_desconocido_no_cierra_un_kev_avisado(self):
+        cfg = self.cfg = self.config(componentes={PG: {"nivel": "patch", "expuesto": True}}, escaner={"comando": ["e"]})
+        sin = {"Results": [{"Vulnerabilities": [{"VulnerabilityID": KEV, "Severity": "CRITICAL"}]}]}
+        self.red.respuestas[fuentes.KEV] = (200, {}, json.dumps({"vulnerabilities": [{"cveID": KEV}]}).encode())
+        self.correr(escanear=lambda c, ids, cves, t: {i: escaner.resumir(sin, cves) for i in ids})
+        self.correr(AHORA + 60, escanear=lambda c, ids, cves, t: {i: {"estado": "desconocido", "motivo": "x"} for i in ids})
+        self.assertEqual(list(self.incidentes().values()), ["falla explotada sin arreglo"])
+        self.assertEqual(cfg["escaner"]["comando"], ["e"])
+
+    def test_un_kev_con_arreglo_sin_imagen_nueva_avisa_pasado_el_plazo(self):
+        self.cfg = self.config(componentes={PG: {"nivel": "patch", "expuesto": True}}, escaner={"comando": ["e"]})
+        self.red.hub("library/postgres", [tag("16.15", VIEJA, H)])
+        self.red.respuestas[fuentes.KEV] = (200, {}, json.dumps({"vulnerabilities": [{"cveID": KEV}]}).encode())
+        r = self.correr(escanear=self.escanear())
+        self.assertIn("sin una imagen nueva que aplicar", r["resumen"])
+        self.correr(AHORA + DIA + 60, escanear=self.escanear())
+        self.assertEqual(list(self.incidentes().values()), ["falla explotada sin imagen nueva"])
+
+    # 12
+    def test_sin_poder_listar_los_contenedores_tambien_es_sin_medir(self):
+        original = self.s.tomar
+
+        def tomar(servidor, ahora, vigencia):
+            t = original(servidor, ahora, vigencia)
+            t["foto"]["contenedores"] = None
+            return t
+        self.s.tomar = tomar
+        self.correr()
+        self.correr(AHORA + DIA + 60)
+        self.assertEqual(self.incidentes(), {"sin-medir-principal": "servidor sin medir"})
+
+    # 16
+    def test_un_aviso_que_no_salio_se_reintenta(self):
+        cfg = self.config(aviso=["avisar"])
+        db = self.db()
+        estado.incidente(db, "pausa", "vigía en pausa", "texto", AHORA)
+        self.assertEqual(len(corrida.avisar(cfg, db, AHORA, lambda a, t: 1)), 1)
+        self.assertEqual(len(corrida.avisar(cfg, db, AHORA + 60, lambda a, t: 0)), 1)
+        self.assertEqual(corrida.avisar(cfg, db, AHORA + 120, lambda a, t: 0), [])
+
+    # 17
+    def test_la_paginacion_no_lleva_a_otro_servidor(self):
+        red = Red({"https://registro.ejemplo.test/v2/equipo/forja/tags/list": (
+            200, {"link": '<https://ajeno.test/consulta>; rel="next"'}, b'{"tags": ["1.0.0"]}')})
+        self.assertEqual(fuentes.registro_oci("registro.ejemplo.test", "equipo/forja", red)["estado"], "desconocido")
+        self.assertFalse(any("ajeno" in u for u, _ in red.pedidos))
+
+    # 18
+    def test_un_nulo_en_una_lista_de_la_foto_la_rechaza(self):
+        for cambio in (lambda c: c["sistema"].update(kernels=["6.12.1-amd64", None]),
+                       lambda c: c["imagenes"].update({datos.imagen_id(1): {"digests": [None]}})):
+            cruda = datos.foto([("db", "postgres:16.15", 1)])
+            cambio(cruda)
+            with self.assertRaises(censo.FotoError):
+                censo.limpiar(cruda, AHORA, 900)
+
+    # 22
+    def test_parches_que_van_entrando_no_acusan_a_la_rutina(self):
+        original = self.s.tomar
+        dia = [0]
+
+        def tomar(servidor, ahora, vigencia):
+            t = original(servidor, ahora, vigencia)
+            t["foto"]["sistema"]["paquetes"] = [{"nombre": f"lib{dia[0]}", "de": "1", "a": "2", "origen": "x-security",
+                                                 "seguridad": True}]
+            return t
+        self.s.tomar = tomar
+        for d in range(5):
+            dia[0] = d
+            self.correr(AHORA + d * DIA)
+        self.assertEqual(self.incidentes(), {})
+
+    # 23
+    def test_una_respuesta_git_truncada_no_es_una_medicion(self):
+        cuerpo = b"ffff" + b"a" * 40 + b" refs/heads/main\n"
+        red = Red({"https://forja.ejemplo.test/r.git/info/refs": (200, {}, cuerpo)})
+        self.assertIsNone(repos.punta("https://forja.ejemplo.test/r.git", "main", red))
+
+
+class RecuperarTrasUnCorte(Unico):
+    """Hallazgos 2 a 5: un corte entre dos pasos, lo nuevo que no verifica, lo roto que no se cierra solo y el bloqueo
+    que sobrevive entre pasadas."""
+
+    def setUp(self):
+        super().setUp()
+        from test_ejecutor import CON_DATOS
+        self.cfg = self.config(componentes={PG: {"nivel": "patch", "playbook": "datos"}},
+                               acciones={"principal": CON_DATOS}, playbooks=["datos"])
+        self.s.con_datos = {"db"}
+
+    def test_un_corte_entre_la_copia_y_aplicar_escala_y_bloquea_hasta_resolverlo(self):
+        from unittest import mock
+        original = estado.intencion
+
+        def intencion(db, cid, servidor, paso, datos_, ahora):
+            if paso == "aplicar":
+                raise Corte()
+            return original(db, cid, servidor, paso, datos_, ahora)
+        with mock.patch.object(estado, "intencion", intencion):
+            with self.assertRaises(Corte):
+                self.aplicar(presente=True)
+        self.assertEqual(estado.a_medias(self.db()), [])               # el diario no tiene nada abierto
+        self.assertIn("db", self.s.detenidos)
+        acta = self.aplicar(presente=True)
+        self.assertIn("espera a una persona", acta["motivo"])
+        (clave,) = self.incidentes()
+        self.assertTrue(clave.startswith("ambiguo-"))
+        with open(os.path.join(self.cfg["estado_dir"], "avisos", re.sub(r"[^A-Za-z0-9_-]", "-", clave) + ".txt"),
+                  encoding="utf-8") as f:
+            self.assertIn("marca m", f.read())
+        self.ahora = AHORA + 7 * DIA
+        self.assertIn("espera a una persona", self.aplicar(presente=True)["motivo"])      # el bloqueo sigue
+        self.s.detenidos.clear()
+        self.s.formato["db"] = self.s.servicios["db"]
+        self.assertTrue(ejecutor.resuelto(self.cfg, clave, self.ahora))
+        self.ahora = AHORA + 14 * DIA
+        self.assertEqual(self.aplicar(presente=True)["pasos"][0]["resultado"], "aplicada")
+
+    def test_lo_nuevo_que_corre_tras_un_corte_se_verifica(self):
+        self.cfg = self.config(componentes={PG: {"nivel": "patch", "playbook": "imagen"}})
+        self.s.con_datos = set()
+        self.s.corte = ("despues", "db")
+        with self.assertRaises(Corte):
+            self.aplicar(presente=True)
+        self.s.corte = None
+        self.s.falla_verificar = {"db"}
+        self.aplicar(presente=True)
+        self.assertEqual(self.candidata()["estado"], "escalada")
+        self.assertEqual(list(self.incidentes().values()), ["a medias"])
+
+    def test_lo_roto_no_se_cierra_porque_la_candidata_desaparece(self):
+        self.cfg = self.config(componentes={PG: {"nivel": "patch", "playbook": "imagen"}})
+        self.s.con_datos = set()
+        self.s.falla_verificar = {"db"}
+        self.s.falla_volver = {"db"}
+        self.aplicar(presente=True)
+        self.assertEqual(list(self.incidentes().values()), ["vuelta atrás fallida"])
+        self.s.detenidos.add("db")                                      # el contenedor quedó detenido: ya no figura
+        corrida.correr(self.cfg, AHORA + 60, tomar=self.s.tomar, pedir=datos.kev(self.red), escanear=lambda *a: {})
+        self.assertEqual(list(self.incidentes().values()), ["vuelta atrás fallida"])
+        self.assertIn("espera a una persona", self.aplicar(presente=True)["motivo"])
+
+
+class ReinicioRoto(Unico):
+    def test_el_sistema_que_ya_no_pide_reinicio_no_cierra_un_reinicio_incompleto(self):
+        self.red.hub("library/postgres", [tag("16.15", VIEJA, H)])
+        self.cfg = self.config(componentes={"sistema": {"nivel": "patch", "playbook": "reinicio"}},
+                               playbooks=["reinicio"], acciones={"principal": REINICIO})
+        self.s.pide_reinicio = True
+        self.s.no_vuelven = {"db"}
+        self.aplicar(presente=True)
+        corrida.correr(self.cfg, AHORA + 3600, tomar=self.s.tomar, pedir=datos.kev(self.red), escanear=lambda *a: {})
+        self.assertEqual(list(self.incidentes().values()), ["reinicio incompleto"])
 
 
 if __name__ == "__main__":

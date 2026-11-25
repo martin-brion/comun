@@ -95,14 +95,16 @@ def _maquinas(m, servidores):
         raise ConfigError("maquinas inválido")
     limpias = {}
     for nombre, e in esperadas.items():
-        if not _MAQUINA.match(str(nombre)) or not isinstance(e, dict) or set(e) - {"servidor", "apagada"}:
+        if not _MAQUINA.fullmatch(str(nombre)) or not isinstance(e, dict) or set(e) - {"servidor", "apagada", "sin_vigia"}:
             raise ConfigError(f"maquinas: {nombre} inválida")
         servidor = e.get("servidor")
         if servidor is not None and servidor not in servidores:
             raise ConfigError(f"maquinas: {nombre} nombra un servidor desconocido")
-        if not isinstance(e.get("apagada", False), bool):
-            raise ConfigError(f"maquinas: {nombre}: apagada es sí o no")
-        limpias[nombre] = {"servidor": servidor, "apagada": e.get("apagada", False)}
+        if not isinstance(e.get("apagada", False), bool) or not isinstance(e.get("sin_vigia", False), bool):
+            raise ConfigError(f"maquinas: {nombre}: apagada y sin_vigia son sí o no")
+        if servidor is not None and e.get("sin_vigia"):
+            raise ConfigError(f"maquinas: {nombre}: tiene servidor o es sin_vigia, no las dos")
+        limpias[nombre] = {"servidor": servidor, "apagada": e.get("apagada", False), "sin_vigia": e.get("sin_vigia", False)}
     return {"archivo": m["archivo"], "vigencia_s": vigencia, "esperadas": limpias}
 
 
@@ -113,12 +115,12 @@ def _repos(lista, servidores):
     vistos, limpios = set(), []
     for r in lista:
         if (not isinstance(r, dict) or set(r) - {"nombre", "servidor", "local", "remoto", "rama"}
-                or not _NOMBRE.match(str(r.get("nombre"))) or r["nombre"] in vistos):
+                or not _NOMBRE.fullmatch(str(r.get("nombre"))) or r["nombre"] in vistos):
             raise ConfigError("repos: cada uno con nombre único, servidor, local, remoto y rama")
         if r.get("servidor") not in servidores or not _comando(r.get("local")):
             raise ConfigError(f"repos {r['nombre']}: servidor conocido y local como comando en lista")
-        if (not isinstance(r.get("remoto"), str) or not _REMOTO.match(r["remoto"])
-                or not isinstance(r.get("rama"), str) or not _RAMA.match(r["rama"])):
+        if (not isinstance(r.get("remoto"), str) or not _REMOTO.fullmatch(r["remoto"])
+                or not isinstance(r.get("rama"), str) or not _RAMA.fullmatch(r["rama"])):
             raise ConfigError(f"repos {r['nombre']}: remoto https y rama válidos")
         vistos.add(r["nombre"])
         limpios.append({k: r[k] for k in ("nombre", "servidor", "local", "remoto", "rama")})
@@ -133,7 +135,7 @@ def validar(crudo):
         raise ConfigError("falta la lista de servidores")
     vistos = set()
     for s in servidores:
-        if not isinstance(s, dict) or set(s) - {"nombre", "lector"} or not _NOMBRE.match(str(s.get("nombre"))):
+        if not isinstance(s, dict) or set(s) - {"nombre", "lector"} or not _NOMBRE.fullmatch(str(s.get("nombre"))):
             raise ConfigError("servidor inválido")
         if s["nombre"] in vistos:
             raise ConfigError("servidor repetido")
@@ -175,7 +177,7 @@ def validar(crudo):
             isinstance(ventana, dict) and set(ventana) == {"dias", "desde", "hasta"}
             and isinstance(ventana["dias"], list) and ventana["dias"]
             and all(type(d) is int and 0 <= d <= 6 for d in ventana["dias"])
-            and all(isinstance(ventana[k], str) and _HORA.match(ventana[k]) for k in ("desde", "hasta"))
+            and all(isinstance(ventana[k], str) and _HORA.fullmatch(ventana[k]) for k in ("desde", "hasta"))
             and ventana["desde"] < ventana["hasta"]):
         raise ConfigError("ventana inválida: días 0 (lunes) a 6 y un tramo desde < hasta en el mismo día")
     playbooks = crudo.get("playbooks", [])
@@ -199,7 +201,7 @@ def validar(crudo):
         if not (isinstance(urgente, dict) and set(urgente) == {"dias", "desde", "hasta"}
                 and isinstance(urgente["dias"], list) and urgente["dias"]
                 and all(type(d) is int and 0 <= d <= 6 for d in urgente["dias"])
-                and all(isinstance(urgente[k], str) and _HORA.match(urgente[k]) for k in ("desde", "hasta"))
+                and all(isinstance(urgente[k], str) and _HORA.fullmatch(urgente[k]) for k in ("desde", "hasta"))
                 and urgente["desde"] < urgente["hasta"]):
             raise ConfigError("ventana_urgente inválida: un tramo desde < hasta en el mismo día y, si se dan, días 0 a 6")
     reinicio = crudo.get("espera_reinicio_s", 1200)

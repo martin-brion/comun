@@ -2,6 +2,7 @@
 python -m vigia resumen --config vigia.json                  el resumen de la última corrida
 python -m vigia aplicar --config vigia.json [--presente]     una pasada del ejecutor, en su ventana
 python -m vigia salud --config vigia.json [--horas 26]       para un monitor de afuera: 0 bien, 4 si no corre o está en pausa
+python -m vigia resuelto --config vigia.json <incidente>      una persona cierra un incidente y levanta su bloqueo
 python -m vigia foto                                         la foto de este servidor, en JSON
 """
 import argparse
@@ -28,6 +29,9 @@ def main(argv=None):
     sa = sub.add_parser("salud")
     sa.add_argument("--config", required=True)
     sa.add_argument("--horas", type=int, default=26, help="cuántas horas sin una corrida ya es una falla")
+    rs = sub.add_parser("resuelto", help="una persona dice que un incidente está resuelto")
+    rs.add_argument("--config", required=True)
+    rs.add_argument("incidente")
     sub.add_parser("foto")
     args = p.parse_args(argv)
     salida = sys.stdout
@@ -43,6 +47,12 @@ def main(argv=None):
     except config.ConfigError as e:
         print(f"vigia: {e}", file=sys.stderr)
         return 2
+    if args.orden == "resuelto":
+        if ejecutor.resuelto(cfg, args.incidente, int(time.time())):
+            salida.write(f"vigía: {args.incidente} resuelto\n")
+            return 0
+        print(f"vigia: no hay un incidente abierto {args.incidente}", file=sys.stderr)
+        return 1
     if args.orden == "salud":
         codigo, texto = corrida.salud(cfg, int(time.time()), args.horas)
         salida.write(texto + "\n")

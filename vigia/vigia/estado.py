@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS incidentes (
 CREATE TABLE IF NOT EXISTS bloqueos (
   candidata TEXT PRIMARY KEY, compuerta TEXT NOT NULL, detalle TEXT NOT NULL, fechas TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS marcas (clave TEXT PRIMARY KEY, desde INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS intentos (
+  n INTEGER PRIMARY KEY AUTOINCREMENT, candidata TEXT NOT NULL, servidor TEXT NOT NULL, datos TEXT NOT NULL,
+  abierto INTEGER NOT NULL, resultado TEXT, cerrado INTEGER);
 """
 # Columnas que se sumaron después: un estado de una versión anterior se completa al abrirlo, sin perder nada.
 _AGREGADAS = {"incidentes": (("tipo", "TEXT NOT NULL DEFAULT 'incidente'"), ("cierre_avisado", "INTEGER"))}
@@ -69,10 +72,14 @@ def registrar(db, servidor, piezas, ahora):
         for c in vigentes.values():
             fila = db.execute("SELECT estado FROM candidatas WHERE id = ?", (c["id"],)).fetchone()
             if fila is None:
+                # Si reemplaza a otra candidata abierta de la misma pieza (salió una versión más), hereda su fecha: el
+                # plazo cuenta desde que la pieza quedó atrasada, no desde la última publicación.
+                previa = db.execute("SELECT MIN(detectada) AS d FROM candidatas WHERE servidor = ? AND pieza = ? AND "
+                                    "estado IN (?,?,?)", (servidor, c["pieza"]) + ABIERTOS).fetchone()["d"]
                 db.execute("INSERT INTO candidatas (id, servidor, pieza, actual, propuesta, salto, estado, detectada, "
                            "actualizada, datos) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                           (c["id"], servidor, c["pieza"], c["actual"], c["propuesta"], c["salto"], "detectada", ahora,
-                            ahora, json.dumps(c, sort_keys=True)))
+                           (c["id"], servidor, c["pieza"], c["actual"], c["propuesta"], c["salto"], "detectada",
+                            previa or ahora, ahora, json.dumps(c, sort_keys=True)))
                 cambios["nuevas"].append(c["id"])
             elif fila["estado"] in ABIERTOS or fila["estado"] == "aplicando":
                 db.execute("UPDATE candidatas SET actual = ?, actualizada = ?, datos = ? WHERE id = ?",
@@ -229,9 +236,14 @@ def por_avisar(db, ahora, cada_s=86400):
     filas = [dict(f) for f in db.execute(
         "SELECT * FROM incidentes WHERE (tipo = 'incidente' AND cerrado IS NULL AND (avisado IS NULL OR avisado <= ?)) "
         "OR (tipo = 'noticia' AND avisado IS NULL) ORDER BY abierto", (ahora - cada_s,))]
-    with db:
-        db.executemany("UPDATE incidentes SET avisado = ? WHERE id = ?", [(ahora, f["id"]) for f in filas])
     return filas
+
+
+def avisado(db, identificador, ahora, cierre=False):
+    """Anota que el aviso (o el de su cierre) salió. Se llama recién cuando el canal lo aceptó: si no, se reintenta."""
+    with db:
+        db.execute(f"UPDATE incidentes SET {'cierre_avisado' if cierre else 'avisado'} = ? WHERE id = ?",
+                   (ahora, identificador))
 
 
 def por_avisar_cierre(db, ahora):
@@ -239,8 +251,6 @@ def por_avisar_cierre(db, ahora):
     filas = [dict(f) for f in db.execute(
         "SELECT * FROM incidentes WHERE tipo = 'incidente' AND cerrado IS NOT NULL AND avisado IS NOT NULL "
         "AND cierre_avisado IS NULL ORDER BY cerrado")]
-    with db:
-        db.executemany("UPDATE incidentes SET cierre_avisado = ? WHERE id = ?", [(ahora, f["id"]) for f in filas])
     return filas
 
 
@@ -260,6 +270,54 @@ def bloqueo(db, candidata_id, compuerta, detalle, fecha):
 def desbloquear(db, candidata_id):
     with db:
         db.execute("DELETE FROM bloqueos WHERE candidata = ?", (candidata_id,))
+
+
+def abrir_intento(db, candidata_id, servidor, datos, ahora):
+    """El intento entero sobre una candidata, antes de su primer paso: si un corte cae ENTRE dos pasos (todos los del
+    diario ya cerrados), el intento sigue abierto y la pasada siguiente lo encuentra."""
+    with db:
+        return db.execute("INSERT INTO intentos (candidata, servidor, datos, abierto) VALUES (?,?,?,?)",
+                          (candidata_id, servidor, json.dumps(datos, sort_keys=True), ahora)).lastrowid
+
+
+def cerrar_intento(db, n, valor, ahora):
+    with db:
+        db.execute("UPDATE intentos SET resultado = ?, cerrado = ? WHERE n = ? AND resultado IS NULL", (valor, ahora, n))
+
+
+def intentos_abiertos(db):
+    return [dict(f, datos=json.loads(f["datos"])) for f in db.execute("SELECT * FROM intentos WHERE resultado IS NULL "
+                                                                       "ORDER BY n")]
+
+
+def bloquear(db, servidor, incidente, ahora):
+    """En ese servidor no se aplica nada más hasta que el incidente se resuelva: sobrevive entre pasadas."""
+    with db:
+        db.execute("INSERT OR IGNORE INTO marcas (clave, desde) VALUES (?,?)", (f"bloqueo:{servidor}:{incidente}", ahora))
+
+
+def desbloquear_incidente(db, incidente):
+    with db:
+        for f in db.execute("SELECT clave FROM marcas WHERE clave LIKE 'bloqueo:%'").fetchall():
+            if f["clave"].split(":", 2)[2] == incidente:
+                db.execute("DELETE FROM marcas WHERE clave = ?", (f["clave"],))
+
+
+def bloqueados(db):
+    return {f["clave"].split(":", 2)[1] for f in db.execute("SELECT clave FROM marcas WHERE clave LIKE 'bloqueo:%'")}
+
+
+def desde_conjunto(db, prefijo, claves, ahora):
+    """Como `desde`, para un conjunto: anota cada clave presente, borra las que ya no están y devuelve la más vieja (o
+    None si no queda ninguna)."""
+    with db:
+        for f in db.execute("SELECT clave FROM marcas WHERE clave LIKE ?", (prefijo + "%",)).fetchall():
+            if f["clave"][len(prefijo):] not in claves:
+                db.execute("DELETE FROM marcas WHERE clave = ?", (f["clave"],))
+        for c in claves:
+            db.execute("INSERT OR IGNORE INTO marcas (clave, desde) VALUES (?,?)", (prefijo + c, ahora))
+        f = db.execute("SELECT MIN(desde) AS d FROM marcas WHERE clave LIKE ?", (prefijo + "%",)).fetchone()
+    return f["d"]
 
 
 def desde(db, clave, activa, ahora):

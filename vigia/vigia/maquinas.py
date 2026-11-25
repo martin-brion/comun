@@ -31,8 +31,8 @@ def leer(m, ahora):
             raise ValueError
         maquinas = {}
         for x in lista:
-            if not (isinstance(x, dict) and isinstance(x.get("nombre"), str) and _NOMBRE.match(x["nombre"])
-                    and isinstance(x.get("estado"), str) and _ESTADO.match(x["estado"])):
+            if not (isinstance(x, dict) and isinstance(x.get("nombre"), str) and _NOMBRE.fullmatch(x["nombre"])
+                    and isinstance(x.get("estado"), str) and _ESTADO.fullmatch(x["estado"])):
                 raise ValueError
             maquinas[x["nombre"]] = x["estado"]
     except (ValueError, KeyError, TypeError, UnicodeDecodeError):
@@ -57,7 +57,10 @@ def hallazgos(m, censo):
             r.append((f"maquina-detenida-{nombre}", "máquina detenida",
                       f"La máquina virtual {nombre} figura «{estado}» en el censo del hipervisor."))
     for nombre, estado in sorted(censo["maquinas"].items()):
-        if nombre not in m["esperadas"] and estado == "corriendo":
+        e = m["esperadas"].get(nombre)
+        # Corre y nadie la lee: no está declarada, o lo está sin servidor y sin decir a propósito que no se vigila (por
+        # ejemplo, una que se parcha por su propia vía).
+        if estado == "corriendo" and (e is None or (e["servidor"] is None and not e["sin_vigia"])):
             r.append((f"maquina-sin-vigia-{nombre}", "máquina sin vigía",
                       f"La máquina virtual {nombre} corre en el hipervisor y el vigía no la tiene declarada: nadie "
                       "mira sus parches."))

@@ -176,6 +176,9 @@
       },
       "vm-pruebas": {
         "apagada": true
+      },
+      "vm-controlador": {
+        "sin_vigia": true
       }
     }
   },

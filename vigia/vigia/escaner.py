@@ -5,6 +5,7 @@ import subprocess
 import time
 
 ALTAS = ("HIGH", "CRITICAL")
+MAX_KEV = 5000          # las decisiones usan la lista entera; el informe muestra pocas
 
 
 def _correr(argv, tope):
@@ -17,7 +18,8 @@ def _correr(argv, tope):
 
 def resumir(informe, cves_kev):
     """De la salida JSON del escáner a cuentas: total, altas o críticas, con arreglo publicado, y las que figuran en KEV."""
-    if not isinstance(informe, dict) or not isinstance(informe.get("Results", []), list):
+    # Un informe sin la lista de resultados no prueba nada: no es «cero vulnerabilidades».
+    if not isinstance(informe, dict) or not isinstance(informe.get("Results"), list):
         raise ValueError("informe con otra forma")
     vistos = {}
     for r in informe.get("Results") or []:
@@ -31,9 +33,9 @@ def resumir(informe, cves_kev):
     # Un KEV que el escáner encuentra en esta imagen, con una versión que lo arregla: es lo que el vigía llama
     # «aplicabilidad verificada» (la falla está en lo que corre y hay arreglo). Sin arreglo, solo una persona mitiga.
     return {"estado": "ok", "motivo": "", "total": len(vistos), "altas": sum(1 for v in vistos.values() if v["alta"]),
-            "altas_con_arreglo": sum(1 for v in vistos.values() if v["alta"] and v["arreglo"]), "kev": kev[:50],
-            "kev_con_arreglo": [i for i in kev if vistos[i]["arreglo"]][:50],
-            "kev_sin_arreglo": [i for i in kev if not vistos[i]["arreglo"]][:50],
+            "altas_con_arreglo": sum(1 for v in vistos.values() if v["alta"] and v["arreglo"]), "kev": kev[:MAX_KEV],
+            "kev_con_arreglo": [i for i in kev if vistos[i]["arreglo"]][:MAX_KEV],
+            "kev_sin_arreglo": [i for i in kev if not vistos[i]["arreglo"]][:MAX_KEV],
             "kev_aplicable": any(vistos[i]["arreglo"] for i in kev)}
 
 

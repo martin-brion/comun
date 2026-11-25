@@ -20,16 +20,23 @@ Versión del contrato: 0.5.0-dev.1. Lo que sigue no cambia sin decirlo en el ped
 7. **Un KEV no es una alarma por sí solo.** Acorta el plazo y abre el carril de urgencia solo con aplicabilidad
    verificada: el escáner lo encuentra en la imagen que corre, con una versión que lo arregla, y la pieza está declarada
    `expuesto`. Si no, cuenta como una vulnerabilidad alta. Un KEV sin arreglo en algo expuesto es un incidente.
-8. **Una corrida a la vez.** Un candado de más de dos horas, o de un arranque anterior del servidor, se considera de una
-   corrida muerta.
+8. **Una corrida a la vez.** El candado es un bloqueo del sistema operativo que tiene el proceso mientras vive: si
+   muere (un corte, el reinicio que él mismo pidió), el sistema lo suelta. Ni la antigüedad ni el contenido del archivo
+   deciden nada.
 9. **El ejecutor no improvisa.** Solo llama acciones con nombre de la lista cerrada de §6, definidas por la instancia como
-   comandos en lista. Nunca arma una línea de shell. Los valores de los huecos se validan contra un patrón fijo.
+   comandos en lista. Nunca arma una línea de shell. Los valores de los huecos se validan contra un patrón fijo, de punta
+   a punta (sin saltos de línea ni caracteres de control); la foto, igual. Si una acción pasa sus argumentos por ssh,
+   el ssh los vuelve a leer como una línea: la instancia los pasa como datos (por ejemplo, un comando forzado que solo
+   lee sus argumentos), nunca a un shell.
 10. **La intención va antes que el efecto.** Cada acción que cambia algo deja su entrada en el diario antes de correr, y
     su resultado después.
 11. **Que el comando salga bien no alcanza.** Una aplicación vale cuando el servicio corre con la huella pedida, está
     sano y pasó `verificar`.
-12. **Un corte no se resuelve repitiendo.** Lo que quedó a medias se mide: si ya corre lo nuevo, hecho; si sigue lo
-    anterior, no aplicado; si no se puede saber, se escala y en ese servidor no se aplica nada más.
+12. **Un corte no se resuelve repitiendo.** Cada intento sobre una candidata queda abierto, aparte del diario, desde
+    antes de su primer paso hasta que termina: un corte ENTRE dos pasos también se encuentra. Lo que quedó a medias se
+    mide: si corre sano lo anterior en todos sus servicios, no aplicado; si corre sano lo nuevo, se lo **verifica**
+    (`verificar`) y recién entonces está hecho; si no, se escala y en ese servidor no se aplica nada más hasta que una
+    persona diga que está resuelto (`resuelto`). Ese bloqueo sobrevive entre pasadas.
 13. **Sin vuelta atrás exacta no se aplica.** Hace falta la referencia con huella de lo que corre hoy.
     Una pieza con datos, además, se copia antes bajo una marca de ese intento, y solo esa copia se repone.
 14. **El estreno es con el dueño.** La primera aplicación de cada tipo de acción pide `--presente`. Un estreno que falla
@@ -75,7 +82,15 @@ el kernel más nuevo, o `<kernel> reiniciado`; no tiene maduración (lo instalad
 vulnerabilidad alta. Su nivel y su tipo de acción salen del componente `sistema` de la configuración.
 
 La candidata es el paso más chico disponible dentro de la misma familia de etiquetas (mismo prefijo, misma variante,
-misma cantidad de números; las preliminares no cuentan). Los pasos más grandes se informan aparte, sin proponerlos.
+misma cantidad de números; las preliminares no cuentan) y, dentro de ese paso, la versión más nueva que ya maduró (si
+ninguna maduró, la más nueva): si salen parches seguido, uno maduro no espera para siempre al siguiente. Los pasos más
+grandes se informan aparte, sin proponerlos. Si una etiqueta flotante apunta hoy a otra imagen y no se sabe qué versión
+corre, la candidata queda `fuera`: no se puede medir el salto. Una candidata que reemplaza a otra abierta de la misma
+pieza hereda su fecha de detección: el plazo no vuelve a empezar.
+
+**La fecha de publicación** es la del índice público, o, en otro registro OCI, la más tardía entre la fecha de armado de
+la imagen y la primera vez que el vigía vio esa huella: un registro solo da la fecha de armado, que puede ser muy
+anterior a la de publicación.
 
 **Una imagen propia** no se consulta afuera: se consulta su base. Si la imagen dice en sus rótulos sobre qué base se armó,
 con nombre y huella (`org.opencontainers.image.base.name` y `org.opencontainers.image.base.digest`), y esa etiqueta de la
@@ -123,9 +138,14 @@ aprobada por su batería, antes y después.
 - `<estado_dir>/vigia.sqlite3`: el estado, el diario y los incidentes. No se edita a mano.
 - `<estado_dir>/PAUSA`: si existe, el ejecutor no hace nada. Lo crea y lo borra una persona.
 
-Códigos de salida de `python -m vigia`: 0 bien, 1 sin corrida previa, 2 configuración inválida, 3 otra corrida en curso,
-4 (solo `salud`) el vigía no corrió en las últimas `--horas` (26 de fábrica) o está en pausa de más. `salud` es para un
-monitor que vive fuera de lo que el vigía vigila: el vigía no puede avisar que está muerto.
+Códigos de salida de `python -m vigia`: 0 bien, 1 sin corrida previa (o, en `resuelto`, sin ese incidente abierto), 2
+configuración inválida, 3 otra corrida en curso, 4 (solo `salud`) el vigía no corrió en las últimas `--horas` (26 de
+fábrica), el ejecutor no dejó su latido (en `--horas` si hay ventana de urgencia; si no, en una semana más esas horas) o
+está en pausa de más. `salud` es para un monitor que vive fuera de lo que el vigía vigila: el vigía no puede avisar que
+está muerto. Solo lee.
+
+`python -m vigia resuelto --config … <incidente>`: una persona dice que un incidente está resuelto. Se cierra (y se
+avisa su cierre), se levanta el bloqueo del servidor y la candidata escalada vuelve a quedar a la vista.
 
 ## 6. El ejecutor
 
@@ -231,28 +251,33 @@ el vigía actualiza.
 ## 7. Incidentes: cuándo se llama a una persona
 
 Un aviso por incidente, un recordatorio por día mientras siga abierto y uno cuando se cierra. Nunca un aviso de éxito,
-salvo la noticia de una aplicación por urgencia.
+salvo la noticia de una aplicación por urgencia. Un aviso cuenta como dado recién cuando el comando de aviso sale con
+cero; si no, se reintenta en la pasada siguiente. Lo que no se pudo medir no abre ni cierra un incidente.
 
 | Incidente | Se abre | Se cierra |
 |---|---|---|
-| `roto-<candidata>` | vuelta atrás fallida, algo a medias con datos, o un reinicio que no volvió bien | la candidata se cierra |
-| `fallo-<candidata>` | una candidata no entró en dos intentos | la candidata se cierra |
-| `ambiguo-<candidata>` | un corte dejó algo que no se puede medir | la candidata se cierra |
+| `roto-<candidata>` | vuelta atrás fallida, algo a medias con datos, o un reinicio que no volvió bien. Bloquea el servidor | la candidata se cierra porque se la midió en la versión propuesta o al día (nunca por descartarse, y nunca la del sistema), o `resuelto` |
+| `ambiguo-<candidata>` | un corte dejó algo que no se puede acreditar. Bloquea el servidor | igual que `roto` |
+| `fallo-<candidata>` | una candidata no entró en dos intentos | la candidata se cierra o se descarta |
 | `plazo-<candidata>` | se venció el plazo de la candidata | la candidata se cierra |
 | `estreno-<tipo>` | una candidata frena solo por el estreno | el tipo se estrena |
 | `trabada-<candidata>` | dos ventanas seguidas frena en la misma compuerta de persona (acciones, imagen fija, vuelta atrás, servicios, arranque medible) | pasa esa compuerta o la candidata se cierra |
 | `respaldo:<servidor>` | dos ventanas seguidas sin respaldo vigente | `respaldo_vigente` vuelve a dar cero |
-| `sin-medir-<servidor>` | más de un día sin poder medir el servidor | se lo vuelve a medir |
+| `sin-medir-<servidor>` | más de un día sin poder medir el servidor o listar sus contenedores | se lo vuelve a medir |
+| `escaner-<servidor>` | con escáner configurado, más de un día sin ningún resultado | vuelve a dar alguno |
+| `fuente-kev` | más de tres días sin poder leer la lista KEV | se la vuelve a leer |
 | `sistema-desatendidas-<servidor>` | la rutina desatendida del sistema está apagada | se prende |
-| `sistema-seguridad-<servidor>` | parches de seguridad del sistema pendientes por más de `sistema_plazo_h` | ya no hay |
-| `kev:<servidor>:<pieza>` | una pieza expuesta tiene un KEV sin arreglo publicado | ya no lo tiene |
+| `sistema-seguridad-<servidor>` | un mismo parche de seguridad del sistema (paquete y versión) pendiente por más de `sistema_plazo_h` | ya no hay |
+| `kev:<servidor>:<pieza>` | una pieza expuesta tiene un KEV sin arreglo publicado | un escaneo válido dice que ya no, o la pieza dejó de correr |
+| `kevimg:<servidor>:<pieza>` | una pieza expuesta tiene un KEV con arreglo pero no hay imagen nueva que aplicar, por más que el plazo `kev_expuesto` | aparece la candidata, o lo anterior |
 | `pausa` | el archivo `PAUSA` tiene más de `pausa_max_dias` | se borra |
-| `maquinas-censo`, `maquina-…` | el censo de máquinas no se puede leer; una esperada falta o está detenida; una corre sin estar declarada | deja de pasar |
+| `maquinas-censo`, `maquina-…` | el censo de máquinas no se puede leer; una esperada falta o está detenida; una corre sin que la lea un servidor del vigía y sin estar excluida a propósito (`sin_vigia`) | deja de pasar |
 
 ## 8. Lo que solo informa
 
 - **Censo de máquinas virtuales** (`maquinas`): un archivo que deja la instancia, `{"tomada", "maquinas": [{"nombre",
-  "estado"}]}`, con `estado` en `corriendo`, `apagada` u otro; se compara con las esperadas. No enciende ni apaga nada.
+  "estado"}]}`, con `estado` en `corriendo`, `apagada` u otro; se compara con las esperadas (`{servidor, apagada,
+  sin_vigia}`). No enciende ni apaga nada.
 - **Repositorios montados** (`repos`): el commit local (un comando de lectura de la instancia) contra la punta de su rama
   en el remoto, por https y el protocolo de git, sin credenciales. `al día`, `distinto del remoto` o `desconocido`. No
   propone nada: un addon se actualiza por su carril.

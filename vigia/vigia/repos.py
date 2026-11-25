@@ -25,7 +25,7 @@ def _correr(argv, tope=60):
 def local(argv, correr=_correr):
     rc, salida = correr(list(argv), 60)
     texto = salida.decode("ascii", "replace").strip() if rc == 0 else ""
-    return texto if _COMMIT.match(texto) else None
+    return texto if _COMMIT.fullmatch(texto) else None
 
 
 def punta(remoto, rama, pedir):
@@ -45,12 +45,12 @@ def punta(remoto, rama, pedir):
         if largo == 0:
             i += 4
             continue
-        if largo < 4:
-            return None
+        if largo < 4 or i + largo > len(cuerpo):
+            return None                                  # una respuesta truncada no es una medición
         linea = cuerpo[i + 4:i + largo].split(b"\0")[0].rstrip(b"\n")
         i += largo
         commit, _, ref = linea.partition(b" ")
-        if ref == buscada and _COMMIT.match(commit.decode("ascii", "replace")):
+        if ref == buscada and _COMMIT.fullmatch(commit.decode("ascii", "replace")):
             return commit.decode("ascii")
     return None
 

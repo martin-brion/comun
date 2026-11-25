@@ -11,46 +11,50 @@ import re
 import sqlite3
 import subprocess
 import time
+from datetime import datetime, timezone
 
 from . import analisis, censo, escaner, estado, fuentes, informe, maquinas, repos
 
-CANDADO_VIEJO_S = 2 * 3600
 SIN_MEDIR_S = 24 * 3600
-BOOT_ID = "/proc/sys/kernel/random/boot_id"
 
 
 class Ocupado(Exception):
     pass
 
 
-def _arranque_actual():
-    try:
-        with open(BOOT_ID, encoding="ascii") as f:
-            return f.read(64).strip()
-    except OSError:
-        return ""
+class Candado:
+    """Una corrida a la vez, con un bloqueo del sistema operativo sobre `corrida.candado`. Lo tiene el proceso mientras
+    vive: si muere (un corte, el reinicio que él mismo pidió), el sistema lo suelta solo. Ni la antigüedad del archivo ni
+    su contenido deciden nada: una pasada larga nunca se encuentra con otra."""
+
+    def __init__(self, directorio):
+        os.makedirs(directorio, exist_ok=True)
+        self._f = open(os.path.join(directorio, "corrida.candado"), "a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self._f.seek(0)
+                msvcrt.locking(self._f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self._f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self._f.close()
+            raise Ocupado("hay otra corrida en curso") from None
+
+    def soltar(self):
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self._f.seek(0)
+                msvcrt.locking(self._f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        self._f.close()
 
 
-def _candado(directorio, ahora, arranque=_arranque_actual):
-    """Una corrida a la vez. Un candado de más de dos horas es de una corrida que murió: se toma. También el de un
-    arranque anterior del servidor: un reinicio mata la corrida que lo pidió y su candado queda en el disco."""
-    os.makedirs(directorio, exist_ok=True)
-    ruta = os.path.join(directorio, "corrida.candado")
-    actual = arranque()
-    try:
-        with open(ruta, encoding="ascii", errors="replace") as f:
-            previo = f.read(64).strip()
-        if ahora - os.stat(ruta).st_mtime > CANDADO_VIEJO_S or (actual and previo and previo != actual):
-            os.unlink(ruta)
-    except OSError:
-        pass
-    try:
-        fd = os.open(ruta, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        raise Ocupado("hay otra corrida en curso") from None
-    with os.fdopen(fd, "w", encoding="ascii") as f:
-        f.write(actual)
-    return ruta
+def _candado(directorio, ahora=None):
+    return Candado(directorio)
 
 
 def _avisador(argv, tope):
@@ -67,7 +71,8 @@ def _archivo(i):
 
 def avisar(cfg, db, ahora, correr=_avisador):
     """Deja un archivo por incidente que pide aviso (uno al abrirse y un recordatorio por día), uno por noticia y uno por
-    cada cierre de un incidente avisado; si la instancia definió un comando de aviso, se lo pasa. El canal es de la
+    cada cierre de un incidente avisado; si la instancia definió un comando de aviso, se lo pasa. Un aviso cuenta como
+    dado recién cuando el comando sale con cero: si falla, se reintenta en la pasada siguiente. El canal es de la
     instancia: no puede depender de lo que el vigía actualiza."""
     carpeta = os.path.join(cfg["estado_dir"], "avisos")
     rutas = []
@@ -77,8 +82,8 @@ def avisar(cfg, db, ahora, correr=_avisador):
         titulo = "aviso" if i["tipo"] == "noticia" else i["clase"]
         informe._escribir(ruta, f"Vigía de parches · {titulo}\n\n{i['texto']}\n")
         rutas.append(ruta)
-        if cfg["aviso"]:
-            correr(list(cfg["aviso"]) + [ruta], 120)
+        if not cfg["aviso"] or correr(list(cfg["aviso"]) + [ruta], 120) == 0:
+            estado.avisado(db, i["id"], ahora)
     for i in estado.por_avisar_cierre(db, ahora):
         os.makedirs(carpeta, exist_ok=True)
         try:
@@ -89,8 +94,8 @@ def avisar(cfg, db, ahora, correr=_avisador):
         informe._escribir(ruta, f"Vigía de parches · resuelto: {i['clase']}\n\nSe resolvió el "
                                 f"{informe._cuando(i['cerrado'])}. Era:\n\n{i['texto']}\n")
         rutas.append(ruta)
-        if cfg["aviso"]:
-            correr(list(cfg["aviso"]) + [ruta], 120)
+        if not cfg["aviso"] or correr(list(cfg["aviso"]) + [ruta], 120) == 0:
+            estado.avisado(db, i["id"], ahora, cierre=True)
     return rutas
 
 
@@ -113,14 +118,24 @@ def salud(cfg, ahora, horas):
     4 si no. El monitor no puede vivir en lo que el vigía vigila."""
     try:
         with open(os.path.join(cfg["estado_dir"], "latido.json"), encoding="utf-8") as f:
-            ultima = json.load(f).get("corrida")
-    except (OSError, ValueError, AttributeError):
-        ultima = None
+            latidos = json.load(f)
+        latidos = latidos if isinstance(latidos, dict) else {}
+    except (OSError, ValueError):
+        latidos = {}
+    ultima = latidos.get("corrida")
     if type(ultima) is not int:
         return 4, "vigía: sin corridas registradas"
     problemas = []
     if ahora - ultima > horas * 3600:
         problemas.append(f"la última corrida fue hace {(ahora - ultima) // 3600} h")
+    if cfg["ventana"] or cfg["ventana_urgente"]:
+        # El ejecutor deja su latido en cada pasada, aunque esté fuera de la ventana: si no lo deja, su temporizador murió.
+        limite = horas if cfg["ventana_urgente"] else 7 * 24 + horas
+        pasada = latidos.get("ejecutor")
+        if type(pasada) is not int:
+            problemas.append("el ejecutor no registró ninguna pasada")
+        elif ahora - pasada > limite * 3600:
+            problemas.append(f"la última pasada del ejecutor fue hace {(ahora - pasada) // 3600} h")
     pausa = os.path.join(cfg["estado_dir"], "PAUSA")
     if os.path.exists(pausa) and ahora - os.stat(pausa).st_mtime > cfg["pausa_max_dias"] * 86400:
         problemas.append(f"en pausa hace más de {cfg['pausa_max_dias']} días")
@@ -154,14 +169,14 @@ def correr(cfg, ahora=None, tomar=censo.tomar, pedir=fuentes.pedir, escanear=esc
         latido(cfg, "corrida", ahora)
         return resultado
     finally:
-        try:
-            os.unlink(candado)
-        except OSError:
-            pass
+        candado.soltar()
 
 
 def _durable(db, clave, activo, ahora, umbral_s, clase, texto):
-    """Abre un incidente solo si lo que pasa ya dura `umbral_s`; lo cierra en cuanto deja de pasar."""
+    """Abre un incidente solo si lo que pasa ya dura `umbral_s`; lo cierra en cuanto deja de pasar. Con `activo` None (no
+    se pudo medir) no cambia nada: lo desconocido no abre ni cierra."""
+    if activo is None:
+        return
     inicio = estado.desde(db, clave, activo, ahora)
     if inicio is not None and ahora - inicio >= umbral_s:
         estado.incidente(db, clave, clase, texto, ahora)
@@ -171,12 +186,22 @@ def _durable(db, clave, activo, ahora, umbral_s, clase, texto):
 
 def _sistema(cfg, db, nombre, sis, ahora):
     """Los incidentes del sistema de un servidor: parches automáticos apagados, o de seguridad que no entran."""
-    _durable(db, f"sistema-desatendidas-{nombre}", sis["desatendidas"] is False, ahora, 0, "parches del sistema",
+    apagadas = None if sis["desatendidas"] is None else sis["desatendidas"] is False
+    _durable(db, f"sistema-desatendidas-{nombre}", apagadas, ahora, 0, "parches del sistema",
              f"En {nombre}, los parches automáticos del sistema están apagados: nadie instala los de seguridad.")
-    pendientes = bool(sis["de_seguridad"]) and sis["desatendidas"] is not False
-    _durable(db, f"sistema-seguridad-{nombre}", pendientes, ahora, cfg["sistema_plazo_h"] * 3600,
-             "parches del sistema", f"En {nombre} hay {sis['de_seguridad']} parches de seguridad del sistema pendientes "
-             f"desde hace más de {cfg['sistema_plazo_h']} h: la rutina desatendida no los está instalando.")
+    if sis["paquetes"] is None:
+        return
+    # Se mide la antigüedad de cada paquete pendiente en su versión, no la de «haber alguno»: si la rutina instala los de
+    # ayer y hoy aparecen otros, está funcionando.
+    claves = {f"{p['nombre']}={p['a']}" for p in sis["paquetes"] if p["seguridad"]}
+    mas_viejo = estado.desde_conjunto(db, f"paquete:{nombre}:", claves, ahora)
+    clave = f"sistema-seguridad-{nombre}"
+    if mas_viejo is not None and ahora - mas_viejo >= cfg["sistema_plazo_h"] * 3600:
+        estado.incidente(db, clave, "parches del sistema",
+                         f"En {nombre} hay parches de seguridad del sistema pendientes desde hace más de "
+                         f"{cfg['sistema_plazo_h']} h: la rutina desatendida no los está instalando.", ahora)
+    elif mas_viejo is None:
+        estado.cerrar_incidente(db, clave, ahora)
 
 
 def _urgencia(p):
@@ -204,24 +229,36 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes, leer_local=repos._c
                 consultadas[clave] = fuentes.registro_oci(registro, repo, pedir)
         return consultadas[clave]
 
+    db = estado.abrir(cfg["estado_dir"])
+
     def detalle(registro, repo, tag):
         if not con_fuentes:
             return None
         if registro == "docker.io":
             return fuentes.etiqueta_hub(repo, tag, pedir)
-        return fuentes.detalle_oci(registro, repo, tag, pedir)
+        d = fuentes.detalle_oci(registro, repo, tag, pedir)
+        if d and d.get("indice"):
+            # Un registro OCI da la fecha en que se armó la imagen, que puede ser muy anterior a su publicación. La
+            # maduración cuenta desde la más tardía entre esa y la primera vez que el vigía vio esa huella.
+            visto = estado.desde(db, f"visto:{registro}/{repo}@{d['indice']}", True, ahora)
+            vista = analisis._iso(datetime.fromtimestamp(visto, timezone.utc))
+            d["publicada"] = max(d["publicada"] or "", vista)
+        return d
 
     kev = fuentes.kev(pedir) if con_fuentes and cfg["fuentes"]["kev"] else {
         "estado": "desconocido", "motivo": "fuente apagada", "cves": set()}
-    db = estado.abrir(cfg["estado_dir"])
+    _durable(db, "fuente-kev", (kev["estado"] != "ok") if con_fuentes and cfg["fuentes"]["kev"] else None, ahora,
+             3 * 86400, "fuente sin datos", f"Hace más de tres días que no se puede leer la lista de fallas con "
+             f"explotación conocida ({kev.get('motivo', '')}): no se sabe qué es urgente.")
     cambios = {"nuevas": [], "cerradas": [], "descartadas": []}
     servidores = []
     try:
         for servidor in cfg["servidores"]:
             t = tomar(servidor, ahora, cfg["foto_vigencia_s"])
-            _durable(db, f"sin-medir-{servidor['nombre']}", t["estado"] != "ok", ahora, SIN_MEDIR_S, "servidor sin medir",
-                     f"El vigía no puede medir {servidor['nombre']} desde hace más de un día ({t['motivo']}): no sabe "
-                     "qué corre ni qué le falta.")
+            sin_medir = t["estado"] != "ok" or t["foto"]["contenedores"] is None
+            _durable(db, f"sin-medir-{servidor['nombre']}", sin_medir, ahora, SIN_MEDIR_S, "servidor sin medir",
+                     f"El vigía no puede medir {servidor['nombre']} desde hace más de un día "
+                     f"({t['motivo'] or 'no se pueden listar sus contenedores'}): no sabe qué corre ni qué le falta.")
             if t["estado"] != "ok":
                 servidores.append({"nombre": t["nombre"], "estado": "desconocido", "motivo": t["motivo"], "sistema": None,
                                    "piezas": None, "errores": []})
@@ -237,20 +274,19 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes, leer_local=repos._c
                 else:
                     vulnerabilidades = {i: {"estado": "desconocido", "motivo": "el escáner corre en el propio servidor"}
                                         for i in ids}
+                escaneo = None
+                if servidor["lector"] == "local" and cfg["escaner"]["comando"] and ids:
+                    escaneo = not any((vulnerabilidades.get(i) or {}).get("estado") == "ok" for i in ids)
+                _durable(db, f"escaner-{servidor['nombre']}", escaneo, ahora, SIN_MEDIR_S, "escáner sin resultados",
+                         f"En {servidor['nombre']} el escáner no da resultados hace más de un día: no se sabe qué "
+                         "vulnerabilidades hay ni qué es urgente.")
                 c = estado.registrar(db, servidor["nombre"], piezas, ahora)
                 for clave in cambios:
                     cambios[clave] += c[clave]
-                sin_arreglo = set()
+                presentes = set()
                 for p in piezas:
                     p["vulnerabilidades"] = vulnerabilidades.get(p["imagen_id"]) if p["imagen_id"] else None
-                    v = p["vulnerabilidades"] or {}
-                    if p["expuesto"] and v.get("estado") == "ok" and v.get("kev_sin_arreglo"):
-                        clave = f"kev:{servidor['nombre']}:" + analisis.identificador(servidor["nombre"], p["pieza"], "kev", "")
-                        sin_arreglo.add(clave)
-                        estado.incidente(db, clave, "falla explotada sin arreglo",
-                                         f"En {servidor['nombre']}, {p['pieza']} da a internet y tiene fallas con "
-                                         f"explotación conocida sin arreglo publicado ({', '.join(v['kev_sin_arreglo'])}). "
-                                         "El vigía no puede arreglarlo: hace falta mitigarlo a mano.", ahora)
+                    presentes |= _kev(cfg, db, servidor["nombre"], p, ahora)
                     if p.get("candidata"):
                         urgencia = _urgencia(p)
                         if urgencia:
@@ -265,11 +301,23 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes, leer_local=repos._c
                                              f"En {servidor['nombre']}, {p['pieza']} sigue en {p['candidata']['actual']}: el "
                                              f"plazo para pasar a {p['candidata']['propuesta']} venció el "
                                              f"{p['candidata']['plazo']['vence'][:10]}.", ahora)
-                estado.cerrar_por_prefijo(db, f"kev:{servidor['nombre']}:", ahora, salvo=sin_arreglo)
+                # Solo se cierran acá los de piezas que ya no corren; los demás los abre o cierra su propia medición.
+                for prefijo in ("kev:", "kevimg:"):
+                    estado.cerrar_por_prefijo(db, f"{prefijo}{servidor['nombre']}:", ahora, salvo=presentes)
                 for identificador in c["cerradas"] + c["descartadas"]:
-                    for clase in ("plazo", "fallo", "roto", "ambiguo", "trabada"):
+                    for clase in ("plazo", "fallo", "trabada"):
                         estado.cerrar_incidente(db, f"{clase}-{identificador}", ahora)
                     estado.desbloquear(db, identificador)
+                # Lo roto o a medias se cierra solo con evidencia de que la pieza corre: la candidata se cerró porque se
+                # la midió en la versión propuesta o al día. Una candidata descartada (por ejemplo, porque el contenedor
+                # quedó detenido y ya no figura) no prueba nada, y el sistema que ya no pide reinicio tampoco prueba que
+                # volvieron sus servicios: esos los cierra una persona (`resuelto`).
+                for identificador in c["cerradas"]:
+                    if (estado.candidata(db, identificador) or {}).get("pieza") != analisis.SISTEMA:
+                        for clase in ("roto", "ambiguo"):
+                            if estado.abierto(db, f"{clase}-{identificador}"):
+                                estado.cerrar_incidente(db, f"{clase}-{identificador}", ahora)
+                                estado.desbloquear_incidente(db, f"{clase}-{identificador}")
             servidores.append({"nombre": servidor["nombre"], "estado": "ok", "motivo": "",
                                "sistema": sis, "piezas": piezas, "errores": foto["errores"]})
         _pausa(cfg, db, ahora)
@@ -298,6 +346,30 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes, leer_local=repos._c
         return corrida
     finally:
         db.close()
+
+
+def _kev(cfg, db, servidor, p, ahora):
+    """Los incidentes de fallas con explotación conocida en una pieza expuesta: sin arreglo publicado (en seguida), o con
+    arreglo pero sin una imagen nueva que el vigía pueda aplicar (pasado el plazo de urgencia). Con el escaneo
+    desconocido, no cambia nada. Devuelve las claves de la pieza."""
+    sufijo = analisis.identificador(servidor, p["pieza"], "kev", "")
+    sin, img = f"kev:{servidor}:{sufijo}", f"kevimg:{servidor}:{sufijo}"
+    v = p.get("vulnerabilidades") or {}
+    medido = v.get("estado") == "ok" and p["expuesto"]
+    if not p["expuesto"]:
+        medido, v = True, {}
+    if not medido:
+        return {sin, img}
+    _durable(db, sin, bool(v.get("kev_sin_arreglo")), ahora, 0, "falla explotada sin arreglo",
+             f"En {servidor}, {p['pieza']} da a internet y tiene fallas con explotación conocida sin arreglo publicado "
+             f"({', '.join((v.get('kev_sin_arreglo') or [])[:10])}). El vigía no puede arreglarlo: hace falta mitigarlo "
+             "a mano.")
+    sin_imagen = bool(v.get("kev_con_arreglo")) and not p.get("candidata")
+    _durable(db, img, sin_imagen, ahora, cfg["plazos_h"]["kev_expuesto"] * 3600, "falla explotada sin imagen nueva",
+             f"En {servidor}, {p['pieza']} da a internet y tiene fallas con explotación conocida "
+             f"({', '.join((v.get('kev_con_arreglo') or [])[:10])}) que ya tienen arreglo, pero no hay una imagen nueva "
+             "que el vigía pueda aplicar. Hace falta una persona.")
+    return {sin, img}
 
 
 def _pausa(cfg, db, ahora):

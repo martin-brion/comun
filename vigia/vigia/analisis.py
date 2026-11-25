@@ -113,10 +113,10 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
             publicada_texto, indice = publicada_texto or d.get("publicada"), indice or d.get("indice")
         publicada = _fecha(publicada_texto)
         hoy = rotulos.get(BASE_HUELLA, "")
-        if _HUELLA.match(hoy):
+        if _HUELLA.fullmatch(hoy):
             # Armada con la huella de su base en los rótulos: se sabe exactamente cuál tiene y se puede rehacer.
             r["base"] = "base " + hoy[7:19]
-            if fuente["estado"] != "ok" or not _HUELLA.match(str(indice or "")):
+            if fuente["estado"] != "ok" or not _HUELLA.fullmatch(str(indice or "")):
                 # Desconocido, no «propia»: con la fuente caída no se puede decir que su base está al día.
                 r.update(estado="desconocido", motivo=f"base {base.repo}:{base.tag}: no se pudo saber si cambió")
             elif indice == hoy:
@@ -174,6 +174,8 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
         r["candidata"] = _candidata(cfg, servidor, ref, comp, ref.tag or "latest", propuesta, "patch",
                                     hoy["publicada"], "", ahora, hoy.get("indice"), anterior)
         r["candidata"]["nota"] = "la misma etiqueta apunta hoy a una imagen más nueva; no se sabe cuál corre"
+        # Sin saber qué versión corre no se puede medir el salto: podría ser uno mayor. Se informa, no se aplica solo.
+        r["candidata"]["compuerta_version"] = "fuera: no se sabe qué versión corre; no se puede medir el salto"
         return r
     r["actual"] = actual.texto
     mejores = {}
@@ -184,8 +186,14 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
         if V.flotante(e["nombre"], nombres):
             continue
         tamano = V.salto(actual, o, comp.get("linea"))
-        if tamano not in mejores or o.clave > mejores[tamano][0].clave:
-            mejores[tamano] = (o, e)
+        mejores.setdefault(tamano, []).append((o, e))
+    limite = datetime.fromtimestamp(ahora, timezone.utc) - timedelta(days=cfg["maduracion_dias"])
+    for tamano, lista in mejores.items():
+        # La más nueva ya madura antes que la más nueva de todas: si salen parches seguido, uno maduro no espera para
+        # siempre al siguiente. Sin ninguna madura (o sin fechas), la más nueva.
+        lista.sort(key=lambda x: x[0].clave, reverse=True)
+        maduras = [x for x in lista if _fecha(x[1]["publicada"]) is not None and _fecha(x[1]["publicada"]) <= limite]
+        mejores[tamano] = maduras[0] if maduras else lista[0]
     if not mejores:
         r["estado"] = "al día"
         return r
@@ -250,7 +258,10 @@ def piezas(cfg, servidor, foto, consultar, detalle=None, ahora=0):
                            "etiqueta": "", "fijada": False, "actual": None, "estado": "desconocido",
                            "motivo": "el contenedor no dice de qué imagen salió", "candidata": None, "otras": [],
                            "notas": [], "nivel": "nunca", "expuesto": False, "propia": False, "creada": "",
-                           "imagen_id": imagen_id, "servicios": [], "playbook": None})
+                           "imagen_id": imagen_id, "playbook": None,
+                           # Sus servicios cuentan igual para saber si un nombre de servicio se repite en el servidor.
+                           "servicios": sorted({f"{c['proyecto']}/{c['servicio']}" for c in usan
+                                                if c["proyecto"] and c["servicio"]})})
             continue
         salida.append(_pieza(cfg, servidor, ref, texto, imagen, imagen_id, usan, consultar, detalle, ahora))
     salida.append(pieza_sistema(cfg, servidor, foto))

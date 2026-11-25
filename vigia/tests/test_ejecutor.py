@@ -137,6 +137,7 @@ class Base(unittest.TestCase):
 
     def aplicar(self, presente=False, cfg=None, s=None):
         s = s or self.s
+        datos.kev(self.red)
         return ejecutor.aplicar(cfg or self.cfg, presente=presente, tomar=s.tomar, pedir=self.red, correr=s.correr,
                                 reloj=self.reloj, dormir=lambda n: setattr(self, "ahora", self.ahora + n), local=time.gmtime)
 
@@ -334,13 +335,13 @@ class Cortes(Base):
             self.aplicar(presente=True)
         self.s.corte = None
         self.assertEqual([(e["paso"], e["resultado"]) for e in estado.a_medias(self.db())], [("aplicar", None)])
-        self.assertFalse(os.path.exists(os.path.join(self.cfg["estado_dir"], "corrida.candado")))
+        corrida.Candado(self.cfg["estado_dir"]).soltar()           # el corte no dejó el candado tomado
         self.s.llamadas.clear()
 
     def test_corte_despues_de_aplicar_no_repite_la_accion(self):
         self.cortar("despues")
         acta = self.aplicar(presente=True)
-        self.assertEqual(self.s.llamadas, [])                            # midió; no volvió a aplicar
+        self.assertEqual(self.s.llamadas, [["verificar", "db"]])         # midió y verificó; no volvió a aplicar
         (e,) = estado.diario(self.db())
         self.assertEqual((e["resultado"], e["detalle"]), ("hecho", "recuperado tras un corte: ya corría la versión nueva"))
         self.assertEqual(self.candidata()["estado"], "cerrada")
@@ -538,7 +539,7 @@ class Acciones(Base):
 
 class Plazo(Base):
     def test_un_plazo_vencido_abre_un_incidente_y_se_cierra_con_la_candidata(self):
-        observar = lambda t: corrida.correr(self.cfg, t, tomar=self.s.tomar, pedir=self.red)
+        observar = lambda t: corrida.correr(self.cfg, t, tomar=self.s.tomar, pedir=datos.kev(self.red))
         self.assertEqual(observar(AHORA)["avisos"], [])
         r = observar(AHORA + 31 * DIA)
         self.assertEqual(len(r["avisos"]), 1)
