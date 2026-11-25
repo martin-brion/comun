@@ -22,7 +22,7 @@ def _vulnerabilidades(v):
     if not v or v.get("estado") != "ok":
         return "desconocido" + (f" ({v['motivo']})" if v and v.get("motivo") else "")
     texto = f"{v['total']} ({v['altas']} altas, {v['altas_con_arreglo']} con arreglo)"
-    con, sin = v.get("kev_con_arreglo") or [], v.get("kev_sin_arreglo") or []
+    con, sin = (v.get("kev_con_arreglo") or [])[:10], (v.get("kev_sin_arreglo") or [])[:10]
     return (texto + (f"; en KEV, con arreglo: {', '.join(con)}" if con else "")
             + (f"; en KEV, sin arreglo: {', '.join(sin)}" if sin else ""))
 
@@ -140,9 +140,12 @@ def resumen(corrida):
                       "urgencia"]
             elif v.get("kev_sin_arreglo"):
                 r += [f"  ! {_corta(p['pieza'])}: falla con explotación conocida sin arreglo publicado"]
-            elif v.get("kev_con_arreglo"):
+            elif v.get("kev_con_arreglo") and not p["expuesto"]:
                 r += [f"  ! {_corta(p['pieza'])}: falla con explotación conocida y arreglo publicado; no da a internet: "
                       "va por su plazo"]
+            elif v.get("kev_con_arreglo"):
+                r += [f"  ! {_corta(p['pieza'])}: falla con explotación conocida y arreglo publicado, pero sin una imagen "
+                      "nueva que aplicar"]
     m = corrida.get("maquinas")
     if m:
         r += [f"Máquinas virtuales: {len(m['maquinas'])} en el censo." if m["estado"] == "ok"
