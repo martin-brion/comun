@@ -27,7 +27,10 @@ class Base(unittest.TestCase):
             if registro == "docker.io":
                 return fuentes.etiqueta_hub(repo, etiqueta, red)
             return fuentes.detalle_oci(registro, repo, etiqueta, red)
-        return analisis.piezas(cfg, "principal", foto, consultar, detalle, AHORA)
+        piezas = analisis.piezas(cfg, "principal", foto, consultar, detalle, AHORA)
+        # La pieza del sistema va siempre última; estas pruebas miran las imágenes.
+        self.sistema = piezas[-1]
+        return piezas[:-1]
 
     def una(self, *a, **k):
         (p,) = self.piezas(*a, **k)

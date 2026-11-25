@@ -1,12 +1,14 @@
 """python -m vigia correr --config vigia.json [--sin-fuentes]   una corrida; imprime el resumen
 python -m vigia resumen --config vigia.json                  el resumen de la última corrida
 python -m vigia aplicar --config vigia.json [--presente]     una pasada del ejecutor, en su ventana
+python -m vigia salud --config vigia.json [--horas 26]       para un monitor de afuera: 0 bien, 4 si no corre o está en pausa
 python -m vigia foto                                         la foto de este servidor, en JSON
 """
 import argparse
 import json
 import os
 import sys
+import time
 
 from . import config, corrida, ejecutor, foto
 
@@ -23,6 +25,9 @@ def main(argv=None):
     a.add_argument("--config", required=True)
     a.add_argument("--presente", action="store_true",
                    help="el dueño está mirando: habilita el estreno de un tipo de acción y correr fuera de la ventana")
+    sa = sub.add_parser("salud")
+    sa.add_argument("--config", required=True)
+    sa.add_argument("--horas", type=int, default=26, help="cuántas horas sin una corrida ya es una falla")
     sub.add_parser("foto")
     args = p.parse_args(argv)
     salida = sys.stdout
@@ -38,6 +43,10 @@ def main(argv=None):
     except config.ConfigError as e:
         print(f"vigia: {e}", file=sys.stderr)
         return 2
+    if args.orden == "salud":
+        codigo, texto = corrida.salud(cfg, int(time.time()), args.horas)
+        salida.write(texto + "\n")
+        return codigo
     if args.orden == "resumen":
         try:
             with open(os.path.join(cfg["estado_dir"], "resumen.txt"), encoding="utf-8") as f:

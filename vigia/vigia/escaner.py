@@ -28,9 +28,13 @@ def resumir(informe, cves_kev):
                     "alta": previo.get("alta", False) or v.get("Severity") in ALTAS,
                     "arreglo": previo.get("arreglo", False) or bool(v.get("FixedVersion"))}
     kev = sorted(i for i in vistos if i in cves_kev)
+    # Un KEV que el escáner encuentra en esta imagen, con una versión que lo arregla: es lo que el vigía llama
+    # «aplicabilidad verificada» (la falla está en lo que corre y hay arreglo). Sin arreglo, solo una persona mitiga.
     return {"estado": "ok", "motivo": "", "total": len(vistos), "altas": sum(1 for v in vistos.values() if v["alta"]),
             "altas_con_arreglo": sum(1 for v in vistos.values() if v["alta"] and v["arreglo"]), "kev": kev[:50],
-            "kev_aplicable": False}
+            "kev_con_arreglo": [i for i in kev if vistos[i]["arreglo"]][:50],
+            "kev_sin_arreglo": [i for i in kev if not vistos[i]["arreglo"]][:50],
+            "kev_aplicable": any(vistos[i]["arreglo"] for i in kev)}
 
 
 def escanear(comando, imagenes, cves_kev, tope_s, correr=_correr, reloj=time.monotonic):

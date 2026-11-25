@@ -1,11 +1,12 @@
 # Contrato de vigia
 
-Versión del contrato: 0.4.0-dev.1. Lo que sigue no cambia sin decirlo en el pedido antes de cortar.
+Versión del contrato: 0.5.0-dev.1. Lo que sigue no cambia sin decirlo en el pedido antes de cortar.
 
 ## 1. Reglas que no se negocian
 
 1. **Observar no escribe.** `correr` no ejecuta ninguna escritura en un servidor: los únicos comandos son los de
-   `foto.py` (listar e inspeccionar contenedores e imágenes, consultar paquetes, leer cuatro archivos del sistema).
+   `foto.py` (listar e inspeccionar contenedores e imágenes, consultar paquetes, leer cinco archivos del sistema), el
+   escáner y los comandos de lectura que la instancia declara en `repos` (el commit local de un repositorio).
 2. **Desconocido no es bueno.** Una foto ausente, vencida o ilegible, una fuente caída o un escaneo cortado dejan el
    dato en «desconocido». No cierran ni descartan candidatas y no se informan como «al día» ni como «cero».
 3. **La foto es de otra máquina.** Se reconstruye campo por campo, con tipos y tamaños fijos. Un campo de más no pasa;
@@ -16,9 +17,11 @@ Versión del contrato: 0.4.0-dev.1. Lo que sigue no cambia sin decirlo en el ped
 5. **El nivel de fábrica es `nunca`.** Una pieza admite aplicación automática solo si la instancia lo declara. Un salto
    mayor queda siempre afuera, cualquiera sea el nivel.
 6. **Sin maduración no pasa.** Una versión sin fecha de publicación conocida espera.
-7. **Un KEV no es una alarma por sí solo.** Acorta el plazo solo con aplicabilidad verificada; si no, cuenta como una
-   vulnerabilidad alta y se marca para revisar.
-8. **Una corrida a la vez.** Un candado de más de dos horas se considera de una corrida muerta.
+7. **Un KEV no es una alarma por sí solo.** Acorta el plazo y abre el carril de urgencia solo con aplicabilidad
+   verificada: el escáner lo encuentra en la imagen que corre, con una versión que lo arregla, y la pieza está declarada
+   `expuesto`. Si no, cuenta como una vulnerabilidad alta. Un KEV sin arreglo en algo expuesto es un incidente.
+8. **Una corrida a la vez.** Un candado de más de dos horas, o de un arranque anterior del servidor, se considera de una
+   corrida muerta.
 9. **El ejecutor no improvisa.** Solo llama acciones con nombre de la lista cerrada de §6, definidas por la instancia como
    comandos en lista. Nunca arma una línea de shell. Los valores de los huecos se validan contra un patrón fijo.
 10. **La intención va antes que el efecto.** Cada acción que cambia algo deja su entrada en el diario antes de correr, y
@@ -30,9 +33,16 @@ Versión del contrato: 0.4.0-dev.1. Lo que sigue no cambia sin decirlo en el ped
 13. **Sin vuelta atrás exacta no se aplica.** Hace falta la referencia con huella de lo que corre hoy.
     Una pieza con datos, además, se copia antes bajo una marca de ese intento, y solo esa copia se repone.
 14. **El estreno es con el dueño.** La primera aplicación de cada tipo de acción pide `--presente`. Un estreno que falla
-    no cuenta.
+    no cuenta. Un estreno listo y sin hacer se avisa, una vez.
 15. **Nada por silencio.** Sin ventana definida, sin tipo de acción habilitado o con el archivo `PAUSA`, no aplica.
     Una candidata escalada espera a una persona.
+16. **Nada trabado en silencio, nada de más.** A una persona se la llama solo por lo que el vigía no puede resolver
+    solo (§7). Lo que se arregla solo no se avisa; lo que dura, sí. Un incidente avisado avisa también su cierre.
+17. **La urgencia no saltea compuertas: solo la espera.** Una candidata urgente no espera la maduración y entra en la
+    ventana de urgencia; todas las demás compuertas valen igual, y además el escáner tiene que comprobar que la versión
+    propuesta ya no tiene esa falla. Solo para una imagen pública con el tipo `imagen` o `datos`.
+18. **El reinicio no tiene vuelta atrás.** Va último en la pasada, nunca después de una falla de esa pasada, solo con el
+    arranque medible, y si algo no vuelve escala.
 
 ## 2. La foto (`esquema: 1`)
 
@@ -40,20 +50,29 @@ Versión del contrato: 0.4.0-dev.1. Lo que sigue no cambia sin decirlo en el ped
 {"esquema": 1, "tomada": <segundos>,
  "sistema": {"id", "version", "nombre", "kernel_en_uso", "kernels": [..] | null, "reinicio_pedido": bool,
              "paquetes": [{"nombre", "de", "a", "origen", "seguridad": bool}] | null, "listas_al": <segundos> | null,
-             "desatendidas": bool | null},
+             "desatendidas": bool | null, "arrancado": <segundos> | null},
  "docker": {"version": texto | null},
  "contenedores": [{"nombre", "imagen_ref", "imagen_id", "creado", "estado", "salud", "proyecto", "servicio"}] | null,
  "imagenes": {"<imagen_id>": {"tags": [..], "digests": [..], "creada", "etiquetas": {..}}},
  "errores": [texto]}
 ```
 
-`null` es «no se pudo medir». De los rótulos de una imagen solo viajan cuatro: nombre y huella de la base, versión y
+`null` es «no se pudo medir». `arrancado` es `btime` de `/proc/stat` y se suma en 0.5.0 sin cambiar el esquema: una foto
+sin ese campo vale igual (el reinicio queda sin poder medirse). De los rótulos de una imagen solo viajan cuatro: nombre y huella de la base, versión y
 revisión. No viajan variables de entorno, montajes, comandos ni configuración de los servicios.
 
 ## 3. Una pieza y su candidata
 
 Una pieza es una imagen distinta que corre en un servidor. Estados: `al día`, `atrasada`, `propia`, `base renovada`,
-`desconocido`.
+`desconocido`. Un contenedor creado desde el ID de su imagen (`sha256:…` o su forma corta) no se consulta como si fuera un
+repositorio: se usa una etiqueta local de esa imagen, una propia antes que cualquier otra, y sin ninguna queda «sin
+referencia».
+
+**El sistema** de cada servidor es una pieza más, `sistema`, siempre la última de la lista: `al día`, `reinicio pedido`
+o `desconocido`. Los paquetes los instala la rutina desatendida de la distribución; lo que le queda al vigía es el
+reinicio que esa rutina pide (`/var/run/reboot-required`, o un kernel más nuevo instalado sin usar). Su candidata propone
+el kernel más nuevo, o `<kernel> reiniciado`; no tiene maduración (lo instalado ya está instalado) y su plazo es el de una
+vulnerabilidad alta. Su nivel y su tipo de acción salen del componente `sistema` de la configuración.
 
 La candidata es el paso más chico disponible dentro de la misma familia de etiquetas (mismo prefijo, misma variante,
 misma cantidad de números; las preliminares no cuentan). Los pasos más grandes se informan aparte, sin proponerlos.
@@ -77,7 +96,8 @@ base que es otra imagen propia no se consulta afuera. Con la fuente de la base c
 `referencia` es la imagen propuesta fijada por huella (`registro/repo:versión@sha256:…`); `anterior`, la que corre hoy,
 también con huella. Sin alguna de las dos el ejecutor no aplica.
 
-`id` es estable: sale del servidor, la pieza, la variante y la versión propuesta. `compuerta_version` vale `pasaría`,
+`id` es estable: sale del servidor, la pieza, la variante y la versión propuesta. `urgencia` (opcional) lista los KEV con
+arreglo que el escáner encontró en la imagen que corre, si la pieza está declarada `expuesto` y no es propia. `compuerta_version` vale `pasaría`,
 `espera: …` o `fuera: …`. Es la primera de las compuertas del ejecutor (§6).
 
 ## 4. Estados de una candidata
@@ -96,10 +116,16 @@ aprobada por su batería, antes y después.
 - `<registro_dir>/<año>/<mes>/<AAMMDD-HHMMSS>-ejecutor.md`: el acta de una pasada del ejecutor, con cada compuerta.
 - `<estado_dir>/resumen.txt`: el resumen de la última corrida, para una persona.
 - `<estado_dir>/avisos/<incidente>.txt`: un archivo por incidente que pide aviso. Uno al abrirse y un recordatorio por día.
+  También uno por noticia (un aviso de una sola vez, sin nada que cerrar).
+- `<estado_dir>/avisos/<incidente>.cerrado.txt`: el cierre de un incidente que se había avisado. Al escribirlo se retira
+  el archivo abierto; el comando de aviso lo recibe igual que los otros.
+- `<estado_dir>/latido.json`: la hora de la última corrida (`corrida`) y de la última pasada del ejecutor (`ejecutor`).
 - `<estado_dir>/vigia.sqlite3`: el estado, el diario y los incidentes. No se edita a mano.
 - `<estado_dir>/PAUSA`: si existe, el ejecutor no hace nada. Lo crea y lo borra una persona.
 
-Códigos de salida de `python -m vigia`: 0 bien, 1 sin corrida previa, 2 configuración inválida, 3 otra corrida en curso.
+Códigos de salida de `python -m vigia`: 0 bien, 1 sin corrida previa, 2 configuración inválida, 3 otra corrida en curso,
+4 (solo `salud`) el vigía no corrió en las últimas `--horas` (26 de fábrica) o está en pausa de más. `salud` es para un
+monitor que vive fuera de lo que el vigía vigila: el vigía no puede avisar que está muerto.
 
 ## 6. El ejecutor
 
@@ -115,6 +141,13 @@ Códigos de salida de `python -m vigia`: 0 bien, 1 sin corrida previa, 2 configu
   la base en los rótulos de la imagen con que corre el servicio. Su vuelta atrás es la imagen armada sobre la base
   anterior, que la instancia conserva: `volver_propia`. Como no cambia el código, no migra datos. Solo vale para una pieza
   propia, y una pieza propia solo admite este tipo: con otro se pondría a correr la imagen base sola.
+
+- `reinicio`: reinicia el servidor cuando su sistema lo pide (§3). Antes mide cuándo arrancó y qué servicios de compose
+  corren sanos; llama `reiniciar`; espera hasta `espera_reinicio_s` a que el servidor arranque de nuevo (el arranque
+  medido cambia); espera hasta `espera_salud_s` a que vuelvan a correr sanos todos los que corrían; y llama
+  `verificar_servidor`. **No tiene vuelta atrás**: si no arranca, no responde o no vuelve todo, escala. Si no llegó a
+  reiniciar (sigue arriba con el mismo arranque), nada cambió y cuenta como un intento fallido. Solo vale para la pieza
+  `sistema`, y la pieza `sistema` solo admite este tipo.
 
 El respaldo es de la instancia. El vigía pide por nombre (¿hay uno vigente?, copiá esto, reponé esto) y no sabe qué
 sistema responde: cambiar de servicio de respaldo es cambiar los comandos de `acciones`.
@@ -132,10 +165,16 @@ sistema responde: cambiar de servicio de respaldo es cambiar los comandos de `ac
 | `construir_propia` | `{servicio}`, `{base}` | Arma la imagen de ese servicio, la misma versión que corre, sobre esa base, con su nombre y su huella en los rótulos, y la prueba aislada (sin red ni datos reales). Cero solo si quedó armada y pasó su prueba. No cambia lo que corre. Conserva la imagen que corre hoy. Repetirla con los mismos valores no cambia nada. |
 | `aplicar_propia` | `{servicio}`, `{base}` | Deja el servicio corriendo con la imagen armada sobre esa base. Sin esa imagen armada, falla. |
 | `volver_propia` | `{servicio}`, `{base}` | Deja el servicio corriendo con la imagen armada sobre esa base anterior, la que conservó. |
+| `reiniciar` | — | Reinicia el servidor. Puede no volver (corta la conexión o al propio vigía): el vigía no mira su salida sino el arranque. |
+| `verificar_servidor` | — | Cero solo si el servidor quedó bien después de arrancar: lo que la instancia sepa que un reinicio puede romper (temporizadores sin próxima corrida, montajes, servicios fuera de compose). No cambia nada. |
+
+Toda acción que recibe `{servicio}` puede recibir además `{proyecto}`, el proyecto de compose
+(`^[a-z0-9][a-z0-9_-]{0,62}$`). Si todas las acciones de servicio de un tipo lo usan, dos proyectos pueden tener un
+servicio con el mismo nombre; si no, el nombre del servicio tiene que ser único en todo el servidor.
 
 `{servicio}` es el nombre del servicio de compose (`^[a-z0-9][a-z0-9_.-]{0,62}$`); `{referencia}` y `{base}`, una imagen
 con huella; `{marca}`, un identificador que pone el vigía (`^m[0-9]{9,12}$`). Una acción tiene 15 minutos, y `construir_propia` una
-hora; pasado ese tiempo cuenta como falla.
+hora; pasado ese tiempo cuenta como falla. `reiniciar` tiene cinco minutos para salir, pero lo que vale es el arranque medido.
 
 Con `datos`, lo que el servicio haya escrito entre la copia y la restauración se pierde: por eso la copia se toma con el
 servicio detenido y justo antes. Retirar copias viejas es de la instancia, y nunca la de un intento que quedó a medias.
@@ -149,7 +188,10 @@ versión → `verificar`. La instancia pone en el rótulo de la base exactamente
 Si el armado falla, no se tocó nada: queda como estaba y cuenta como un intento fallido. Si falla después,
 `volver_propia` → sano sobre la base anterior → `verificar`.
 
-**Tras un corte.** Un armado a medias con el servicio sobre la base de siempre es «no aplicado». Una copia a medias con el servicio corriendo lo de siempre es «no aplicado». Una copia a medias con el
+**Tras un corte.** Un reinicio a medias se resuelve midiendo el arranque: si cambió, volvió todo lo que corría y
+`verificar_servidor` da cero, está hecho (y cuenta como estreno si lo era); si no cambió pasado `espera_reinicio_s`, no se
+aplicó; mientras el servidor recién arranca, espera; si arrancó y no volvió todo, escala. Para que esto pase cuando el
+vigía corre en el mismo servidor, la instancia corre una pasada de `aplicar` al arrancar. Un armado a medias con el servicio sobre la base de siempre es «no aplicado». Una copia a medias con el servicio corriendo lo de siempre es «no aplicado». Una copia a medias con el
 servicio detenido, o una restauración a medias, es ambiguo: no se mide cómo quedaron los datos desde afuera. El aviso
 dice la marca de la copia de ese intento.
 
@@ -161,11 +203,20 @@ dice la marca de la copia de ese intento.
 4. Estreno: el tipo ya se aplicó bien una vez, o la pasada es `--presente`.
 5. Imagen fija: se conoce la huella de la versión propuesta.
 6. Vuelta atrás: se conoce la huella de la imagen de hoy.
-7. Servicios: cada contenedor que usa la imagen es un servicio de compose con nombre único.
+7. Servicios: cada contenedor que usa la imagen es un servicio de compose que se puede nombrar sin ambigüedad.
 8. Sin escalar.
-9. Respaldo: `respaldo_vigente` salió con cero. Va última porque es la única que corre un comando.
+9. Arreglo comprobado, solo si la candidata no maduró y va por urgencia: el escáner revisa la versión propuesta (por su
+   referencia con huella) y ya no encuentra esos KEV. Sin escáner local, no pasa.
+10. Respaldo: `respaldo_vigente` salió con cero. Va última porque es la única que corre un comando del servidor.
 
-Además: la ventana (o `--presente`), un servidor por día de ventana, el tope `max_por_ventana` y el archivo `PAUSA`.
+El tipo `reinicio` cambia 5 a 7 por **arranque medible**: la foto dice cuándo arrancó el servidor.
+
+Además: la ventana (o `--presente`), un servidor por día de ventana, el tope `max_por_ventana`, el archivo `PAUSA` y,
+para el reinicio, que nada haya fallado antes en la misma pasada (va último).
+
+**Dos ventanas.** La ordinaria (`ventana`) toma todas las candidatas. La de urgencia (`ventana_urgente`, todos los días de
+fábrica) toma solo las urgentes (§3), en el servidor que ya la tomó ese día o, si no, en el que tiene la urgencia de plazo
+más corto. Cada una lleva su propio tope. Cada candidata que entró sin esperar la maduración deja una noticia.
 
 **Varios servicios con la misma imagen.** Se aplican de a uno. Si uno falla y quedó como estaba, los que ya habían
 cambiado vuelven también; con `datos` eso no se hace a ciegas: se escala. Una candidata se intenta una sola vez por pasada.
@@ -177,5 +228,31 @@ vuelta atrás también` (se escala, se avisa y la ventana se frena ahí).
 comando. Por dónde llega a una persona (un chat, un mail) lo decide la instancia: el canal no puede depender de lo que
 el vigía actualiza.
 
-**Incidentes que piden a una persona.** Vuelta atrás fallida; una candidata que no entró dos veces; algo a medias tras
-un corte; y un plazo vencido. Se cierran solos cuando la candidata se cierra.
+## 7. Incidentes: cuándo se llama a una persona
+
+Un aviso por incidente, un recordatorio por día mientras siga abierto y uno cuando se cierra. Nunca un aviso de éxito,
+salvo la noticia de una aplicación por urgencia.
+
+| Incidente | Se abre | Se cierra |
+|---|---|---|
+| `roto-<candidata>` | vuelta atrás fallida, algo a medias con datos, o un reinicio que no volvió bien | la candidata se cierra |
+| `fallo-<candidata>` | una candidata no entró en dos intentos | la candidata se cierra |
+| `ambiguo-<candidata>` | un corte dejó algo que no se puede medir | la candidata se cierra |
+| `plazo-<candidata>` | se venció el plazo de la candidata | la candidata se cierra |
+| `estreno-<tipo>` | una candidata frena solo por el estreno | el tipo se estrena |
+| `trabada-<candidata>` | dos ventanas seguidas frena en la misma compuerta de persona (acciones, imagen fija, vuelta atrás, servicios, arranque medible) | pasa esa compuerta o la candidata se cierra |
+| `respaldo:<servidor>` | dos ventanas seguidas sin respaldo vigente | `respaldo_vigente` vuelve a dar cero |
+| `sin-medir-<servidor>` | más de un día sin poder medir el servidor | se lo vuelve a medir |
+| `sistema-desatendidas-<servidor>` | la rutina desatendida del sistema está apagada | se prende |
+| `sistema-seguridad-<servidor>` | parches de seguridad del sistema pendientes por más de `sistema_plazo_h` | ya no hay |
+| `kev:<servidor>:<pieza>` | una pieza expuesta tiene un KEV sin arreglo publicado | ya no lo tiene |
+| `pausa` | el archivo `PAUSA` tiene más de `pausa_max_dias` | se borra |
+| `maquinas-censo`, `maquina-…` | el censo de máquinas no se puede leer; una esperada falta o está detenida; una corre sin estar declarada | deja de pasar |
+
+## 8. Lo que solo informa
+
+- **Censo de máquinas virtuales** (`maquinas`): un archivo que deja la instancia, `{"tomada", "maquinas": [{"nombre",
+  "estado"}]}`, con `estado` en `corriendo`, `apagada` u otro; se compara con las esperadas. No enciende ni apaga nada.
+- **Repositorios montados** (`repos`): el commit local (un comando de lectura de la instancia) contra la punta de su rama
+  en el remoto, por https y el protocolo de git, sin credenciales. `al día`, `distinto del remoto` o `desconocido`. No
+  propone nada: un addon se actualiza por su carril.

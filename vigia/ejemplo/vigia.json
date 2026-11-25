@@ -43,6 +43,10 @@
       "base": "python:3.13-slim",
       "nivel": "patch",
       "playbook": "propia"
+    },
+    "sistema": {
+      "nivel": "patch",
+      "playbook": "reinicio"
     }
   },
   "maduracion_dias": 7,
@@ -60,7 +64,13 @@
     "kev": true
   },
   "escaner": {
-    "comando": null,
+    "comando": [
+      "trivy",
+      "image",
+      "--quiet",
+      "--format",
+      "json"
+    ],
     "tope_s": 2700
   },
   "estado_dir": "/var/lib/vigia",
@@ -76,7 +86,8 @@
   "playbooks": [
     "imagen",
     "datos",
-    "propia"
+    "propia",
+    "reinicio"
   ],
   "acciones": {
     "principal": {
@@ -87,49 +98,57 @@
       "aplicar_imagen": [
         "/usr/local/sbin/vigia-accion",
         "aplicar-imagen",
-        "{servicio}",
+        "{proyecto}/{servicio}",
         "{referencia}"
       ],
       "verificar": [
         "/usr/local/sbin/vigia-accion",
         "verificar",
-        "{servicio}"
+        "{proyecto}/{servicio}"
       ],
       "volver_imagen": [
         "/usr/local/sbin/vigia-accion",
         "volver-imagen",
-        "{servicio}",
+        "{proyecto}/{servicio}",
         "{referencia}"
       ],
       "respaldar_datos": [
         "/usr/local/sbin/vigia-accion",
         "respaldar-datos",
-        "{servicio}",
+        "{proyecto}/{servicio}",
         "{marca}"
       ],
       "restaurar_datos": [
         "/usr/local/sbin/vigia-accion",
         "restaurar-datos",
-        "{servicio}",
+        "{proyecto}/{servicio}",
         "{marca}"
       ],
       "construir_propia": [
         "/usr/local/sbin/vigia-accion",
         "construir-propia",
-        "{servicio}",
+        "{proyecto}/{servicio}",
         "{base}"
       ],
       "aplicar_propia": [
         "/usr/local/sbin/vigia-accion",
         "aplicar-propia",
-        "{servicio}",
+        "{proyecto}/{servicio}",
         "{base}"
       ],
       "volver_propia": [
         "/usr/local/sbin/vigia-accion",
         "volver-propia",
-        "{servicio}",
+        "{proyecto}/{servicio}",
         "{base}"
+      ],
+      "reiniciar": [
+        "/usr/local/sbin/vigia-accion",
+        "reiniciar"
+      ],
+      "verificar_servidor": [
+        "/usr/local/sbin/vigia-accion",
+        "verificar-servidor"
       ]
     }
   },
@@ -137,5 +156,42 @@
   "espera_salud_s": 180,
   "aviso": [
     "/usr/local/sbin/vigia-aviso"
+  ],
+  "ventana_urgente": {
+    "desde": "03:00",
+    "hasta": "05:00"
+  },
+  "espera_reinicio_s": 1200,
+  "sistema_plazo_h": 72,
+  "pausa_max_dias": 7,
+  "maquinas": {
+    "archivo": "/var/lib/vigia/maquinas.json",
+    "vigencia_s": 3600,
+    "esperadas": {
+      "vm-principal": {
+        "servidor": "principal"
+      },
+      "vm-hoja-1": {
+        "servidor": "hoja-1"
+      },
+      "vm-pruebas": {
+        "apagada": true
+      }
+    }
+  },
+  "repos": [
+    {
+      "nombre": "addons-ejemplo",
+      "servidor": "principal",
+      "local": [
+        "git",
+        "-C",
+        "/srv/odoo/addons/ejemplo",
+        "rev-parse",
+        "HEAD"
+      ],
+      "remoto": "https://forja.ejemplo.test/addons/ejemplo.git",
+      "rama": "18.0"
+    }
   ]
 }

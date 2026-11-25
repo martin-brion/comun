@@ -26,7 +26,12 @@ CREATE TABLE IF NOT EXISTS ventanas (fecha TEXT PRIMARY KEY, servidor TEXT NOT N
 CREATE TABLE IF NOT EXISTS incidentes (
   id TEXT PRIMARY KEY, clase TEXT NOT NULL, texto TEXT NOT NULL, abierto INTEGER NOT NULL, cerrado INTEGER,
   avisado INTEGER);
+CREATE TABLE IF NOT EXISTS bloqueos (
+  candidata TEXT PRIMARY KEY, compuerta TEXT NOT NULL, detalle TEXT NOT NULL, fechas TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS marcas (clave TEXT PRIMARY KEY, desde INTEGER NOT NULL);
 """
+# Columnas que se sumaron después: un estado de una versión anterior se completa al abrirlo, sin perder nada.
+_AGREGADAS = {"incidentes": (("tipo", "TEXT NOT NULL DEFAULT 'incidente'"), ("cierre_avisado", "INTEGER"))}
 
 
 def abrir(directorio):
@@ -35,6 +40,15 @@ def abrir(directorio):
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA synchronous = FULL")
     db.executescript(_ESQUEMA)
+    for tabla, columnas in _AGREGADAS.items():
+        hay = {f["name"] for f in db.execute(f"PRAGMA table_info({tabla})")}
+        with db:
+            for nombre, tipo in columnas:
+                if nombre not in hay:
+                    db.execute(f"ALTER TABLE {tabla} ADD COLUMN {nombre} {tipo}")
+                    if nombre == "cierre_avisado":
+                        # Lo que ya estaba cerrado antes de esta versión no se anuncia ahora como cerrado.
+                        db.execute("UPDATE incidentes SET cierre_avisado = cerrado WHERE cerrado IS NOT NULL")
     return db
 
 
@@ -174,7 +188,8 @@ def incidente(db, identificador, clase, texto, ahora):
         if f is None:
             db.execute("INSERT INTO incidentes (id, clase, texto, abierto) VALUES (?,?,?,?)", (identificador, clase, texto, ahora))
         elif f["cerrado"] is not None:
-            db.execute("UPDATE incidentes SET clase = ?, texto = ?, abierto = ?, cerrado = NULL, avisado = NULL WHERE id = ?",
+            db.execute("UPDATE incidentes SET clase = ?, texto = ?, abierto = ?, cerrado = NULL, avisado = NULL, "
+                       "cierre_avisado = NULL WHERE id = ?",
                        (clase, texto, ahora, identificador))
 
 
@@ -184,16 +199,78 @@ def cerrar_incidente(db, identificador, ahora):
 
 
 def incidentes(db):
-    return [dict(f) for f in db.execute("SELECT * FROM incidentes WHERE cerrado IS NULL ORDER BY abierto")]
+    return [dict(f) for f in db.execute(
+        "SELECT * FROM incidentes WHERE cerrado IS NULL AND tipo = 'incidente' ORDER BY abierto")]
+
+
+def abierto(db, identificador):
+    return db.execute("SELECT 1 FROM incidentes WHERE id = ? AND cerrado IS NULL AND tipo = 'incidente'",
+                      (identificador,)).fetchone() is not None
+
+
+def cerrar_por_prefijo(db, prefijo, ahora, salvo=()):
+    """Cierra los incidentes abiertos cuyo identificador empieza así, salvo los nombrados."""
+    for f in db.execute("SELECT id FROM incidentes WHERE cerrado IS NULL AND tipo = 'incidente' AND id LIKE ?",
+                        (prefijo.replace("%", "") + "%",)).fetchall():
+        if f["id"] not in salvo:
+            cerrar_incidente(db, f["id"], ahora)
+
+
+def noticia(db, identificador, clase, texto, ahora):
+    """Un aviso de una sola vez, sin incidente abierto (por ejemplo, una aplicación por urgencia): nada que cerrar."""
+    with db:
+        db.execute("INSERT OR IGNORE INTO incidentes (id, clase, texto, abierto, cerrado, tipo) VALUES (?,?,?,?,?,?)",
+                   (identificador, clase, texto, ahora, ahora, "noticia"))
 
 
 def por_avisar(db, ahora, cada_s=86400):
-    """Los incidentes abiertos sin aviso, o avisados hace más de un día: un aviso por incidente y un recordatorio diario."""
+    """Los incidentes abiertos sin aviso, o avisados hace más de un día (un aviso por incidente y un recordatorio
+    diario), y las noticias que todavía no salieron."""
     filas = [dict(f) for f in db.execute(
-        "SELECT * FROM incidentes WHERE cerrado IS NULL AND (avisado IS NULL OR avisado <= ?) ORDER BY abierto", (ahora - cada_s,))]
+        "SELECT * FROM incidentes WHERE (tipo = 'incidente' AND cerrado IS NULL AND (avisado IS NULL OR avisado <= ?)) "
+        "OR (tipo = 'noticia' AND avisado IS NULL) ORDER BY abierto", (ahora - cada_s,))]
     with db:
         db.executemany("UPDATE incidentes SET avisado = ? WHERE id = ?", [(ahora, f["id"]) for f in filas])
     return filas
+
+
+def por_avisar_cierre(db, ahora):
+    """Los incidentes que se avisaron y ya se cerraron: su cierre se avisa una vez."""
+    filas = [dict(f) for f in db.execute(
+        "SELECT * FROM incidentes WHERE tipo = 'incidente' AND cerrado IS NOT NULL AND avisado IS NOT NULL "
+        "AND cierre_avisado IS NULL ORDER BY cerrado")]
+    with db:
+        db.executemany("UPDATE incidentes SET cierre_avisado = ? WHERE id = ?", [(ahora, f["id"]) for f in filas])
+    return filas
+
+
+def bloqueo(db, candidata_id, compuerta, detalle, fecha):
+    """Anota que una candidata frenó en una compuerta que solo destraba una persona. Devuelve en cuántas fechas
+    distintas frenó seguido en esa misma compuerta."""
+    with db:
+        f = db.execute("SELECT compuerta, fechas FROM bloqueos WHERE candidata = ?", (candidata_id,)).fetchone()
+        fechas = json.loads(f["fechas"]) if f and f["compuerta"] == compuerta else []
+        if fecha not in fechas:
+            fechas = (fechas + [fecha])[-10:]
+        db.execute("INSERT OR REPLACE INTO bloqueos (candidata, compuerta, detalle, fechas) VALUES (?,?,?,?)",
+                   (candidata_id, compuerta, detalle, json.dumps(fechas)))
+    return len(fechas)
+
+
+def desbloquear(db, candidata_id):
+    with db:
+        db.execute("DELETE FROM bloqueos WHERE candidata = ?", (candidata_id,))
+
+
+def desde(db, clave, activa, ahora):
+    """Desde cuándo sigue pasando algo (por ejemplo, un servidor que no se puede medir). Con `activa` falso se borra y
+    devuelve None. Sirve para avisar solo lo que dura, no lo que se arregla solo."""
+    with db:
+        if not activa:
+            db.execute("DELETE FROM marcas WHERE clave = ?", (clave,))
+            return None
+        db.execute("INSERT OR IGNORE INTO marcas (clave, desde) VALUES (?,?)", (clave, ahora))
+        return db.execute("SELECT desde FROM marcas WHERE clave = ?", (clave,)).fetchone()["desde"]
 
 
 def anotar_corrida(db, ahora, resumen):

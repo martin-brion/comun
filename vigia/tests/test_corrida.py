@@ -136,7 +136,13 @@ class Escaner(Base):
     def test_cuenta_sin_repetir_y_cruza_con_la_lista_de_explotadas(self):
         r = escaner.resumir(self.INFORME, {"CVE-2099-0001"})
         self.assertEqual((r["total"], r["altas"], r["altas_con_arreglo"], r["kev"], r["kev_aplicable"]),
-                         (3, 2, 1, ["CVE-2099-0001"], False))
+                         (3, 2, 1, ["CVE-2099-0001"], True))
+        self.assertEqual((r["kev_con_arreglo"], r["kev_sin_arreglo"]), (["CVE-2099-0001"], []))
+
+    def test_un_kev_sin_arreglo_no_es_aplicable_y_se_separa(self):
+        r = escaner.resumir(self.INFORME, {"CVE-2099-0002"})
+        self.assertEqual((r["kev"], r["kev_con_arreglo"], r["kev_sin_arreglo"], r["kev_aplicable"]),
+                         (["CVE-2099-0002"], [], ["CVE-2099-0002"], False))
 
     def test_sin_escaner_cortado_o_ilegible_es_desconocido_nunca_cero(self):
         ids = [imagen_id(1), imagen_id(2)]
@@ -166,9 +172,10 @@ class Escaner(Base):
         db = r["servidores"][0]["piezas"][0]
         self.assertEqual(db["pieza"], "docker.io/library/postgres")
         self.assertEqual(db["candidata"]["plazo"]["clase"], "alta_interna")
-        self.assertIn("tiene vulnerabilidades con explotación conocida; falta verificar si aplican", r["resumen"])
+        self.assertIn("postgres: falla con explotación conocida y arreglo publicado; no da a internet: va por su plazo",
+                      r["resumen"])
         with open(r["ficha"], encoding="utf-8") as f:
-            self.assertIn("3 (2 altas, 1 con arreglo); en KEV sin aplicabilidad verificada: CVE-2099-0001", f.read())
+            self.assertIn("3 (2 altas, 1 con arreglo); en KEV, con arreglo: CVE-2099-0001", f.read())
 
 
 class Configuracion(Base):

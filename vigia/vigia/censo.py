@@ -51,7 +51,8 @@ def limpiar(cruda, ahora, vigencia_s):
                "kernels": None if s.get("kernels") is None else [_t(k, 120) for k in _lista(s["kernels"], 50)],
                "reinicio_pedido": s.get("reinicio_pedido") is True, "paquetes": paquetes,
                "listas_al": s["listas_al"] if type(s.get("listas_al")) is int else None,
-               "desatendidas": s["desatendidas"] if isinstance(s.get("desatendidas"), bool) else None}
+               "desatendidas": s["desatendidas"] if isinstance(s.get("desatendidas"), bool) else None,
+               "arrancado": s["arrancado"] if type(s.get("arrancado")) is int and s["arrancado"] > 0 else None}
     contenedores = None
     if cruda.get("contenedores") is not None:
         contenedores = []

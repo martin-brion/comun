@@ -213,7 +213,8 @@ class Aplicar(Base):
         self.assertEqual((c["estado"], c["motivo"]), ("cerrada", "aplicada por el vigía y verificada"))
         (e,) = estado.diario(self.db())
         self.assertEqual((e["paso"], e["resultado"], e["datos"]),
-                         ("aplicar", "hecho", {"servicio": "db", "de": f"postgres:16.15@{H}", "a": f"{PG}:16.16@{H2}"}))
+                         ("aplicar", "hecho", {"servicio": "db", "proyecto": "pila", "de": f"postgres:16.15@{H}",
+                                                "a": f"{PG}:16.16@{H2}"}))
         with open(acta["ficha"], encoding="utf-8") as f:
             texto = f.read()
         self.assertIn("postgres: 16.15 → 16.16 · aplicada", texto)

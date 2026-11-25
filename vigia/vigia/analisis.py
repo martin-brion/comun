@@ -13,6 +13,7 @@ from . import versiones as V
 BASE_NOMBRE = "org.opencontainers.image.base.name"
 BASE_HUELLA = "org.opencontainers.image.base.digest"
 VERSION = "org.opencontainers.image.version"
+SISTEMA = "sistema"                 # el nombre de la pieza del sistema del servidor, y de su componente en la configuración
 _HUELLA = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -234,11 +235,16 @@ def piezas(cfg, servidor, foto, consultar, detalle=None, ahora=0):
         por_imagen.setdefault((c["imagen_ref"], c["imagen_id"]), []).append(c)
     salida = []
     for (texto, imagen_id), usan in sorted(por_imagen.items()):
-        ref = V.referencia(texto)
         imagen = foto["imagenes"].get(imagen_id, {})
+        ref = None if es_id(texto, imagen_id) else V.referencia(texto)
         if ref is None:
-            # Un contenedor creado desde un ID de imagen: se usa la primera etiqueta local, si la hay.
-            ref = next((x for x in map(V.referencia, imagen.get("tags", [])) if x), None)
+            # Un contenedor creado desde un ID de imagen («sha256:…» o su forma corta): nunca se consulta como si fuera un
+            # repositorio público. Se usa una etiqueta local de esa imagen, una propia antes que cualquier otra; sin
+            # ninguna, queda «sin referencia».
+            locales = [t for t in imagen.get("tags", []) if V.referencia(t) and not es_id(t, imagen_id)]
+            elegida = next((t for t in locales if es_propia(cfg, V.referencia(t))), locales[0] if locales else None)
+            if elegida:
+                texto, ref = elegida, V.referencia(elegida)
         if ref is None:
             salida.append({"servidor": servidor, "pieza": "(sin referencia)", "contenedores": sorted(c["nombre"] for c in usan),
                            "etiqueta": "", "fijada": False, "actual": None, "estado": "desconocido",
@@ -247,7 +253,48 @@ def piezas(cfg, servidor, foto, consultar, detalle=None, ahora=0):
                            "imagen_id": imagen_id, "servicios": [], "playbook": None})
             continue
         salida.append(_pieza(cfg, servidor, ref, texto, imagen, imagen_id, usan, consultar, detalle, ahora))
+    salida.append(pieza_sistema(cfg, servidor, foto))
     return salida
+
+
+def es_id(texto, imagen_id):
+    """¿La referencia del contenedor es el ID de su imagen y no un nombre?"""
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", texto or ""):
+        return True
+    return bool(re.fullmatch(r"[0-9a-f]{12,64}", texto or "")) and str(imagen_id or "")[7:].startswith(texto)
+
+
+def pieza_sistema(cfg, servidor, foto):
+    """El sistema del servidor como una pieza más. Los paquetes los instala la rutina desatendida de la distribución; lo
+    que queda para el vigía es el reinicio que esa rutina pide (un kernel o una biblioteca nuevos). Su candidata no tiene
+    maduración: lo instalado ya está instalado."""
+    s = foto["sistema"]
+    comp = _config.componente(cfg, SISTEMA)
+    kernels = s["kernels"] or []
+    en_uso = s["kernel_en_uso"]
+    nuevo = bool(en_uso and kernels and en_uso in kernels and en_uso != _mayor(kernels))
+    r = {"servidor": servidor, "pieza": SISTEMA, "contenedores": [], "etiqueta": "", "fijada": True, "actual": en_uso,
+         "estado": "al día", "motivo": "", "candidata": None, "otras": [], "notas": [], "nivel": comp["nivel"],
+         "expuesto": comp["expuesto"], "propia": False, "creada": "", "imagen_id": None, "servicios": [],
+         "playbook": comp.get("playbook"), "sistema": True, "arrancado": s.get("arrancado")}
+    if en_uso is None:
+        r.update(estado="desconocido", motivo="no se pudo leer el kernel en uso")
+        return r
+    if not (s["reinicio_pedido"] or nuevo):
+        return r
+    propuesta = _mayor(kernels) if nuevo else f"{en_uso} reiniciado"
+    r["estado"] = "reinicio pedido"
+    if comp["nivel"] == "nunca":
+        compuerta = "fuera: la pieza no admite aplicación automática"
+    else:
+        compuerta = "pasaría"
+    r["candidata"] = {
+        "id": identificador(servidor, SISTEMA, "", propuesta), "servidor": servidor, "pieza": SISTEMA, "actual": en_uso,
+        "propuesta": propuesta, "salto": "patch", "publicada": None, "madura": None, "nivel": comp["nivel"],
+        "expuesto": comp["expuesto"], "compuerta_version": compuerta,
+        "nota": "kernel nuevo instalado sin usar" if nuevo else "el sistema pide reinicio", "indice": None,
+        "referencia": None, "anterior": None}
+    return r
 
 
 def sistema(foto):
