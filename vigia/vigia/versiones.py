@@ -28,7 +28,7 @@ class Referencia:
 
 def referencia(texto) -> Optional[Referencia]:
     """`[registro/]repo[:tag][@digest]` → Referencia, o None si no parece una referencia de imagen."""
-    if not isinstance(texto, str) or not _SEGURO.match(texto):
+    if not isinstance(texto, str) or not _SEGURO.fullmatch(texto):
         return None
     resto, _, digest = texto.partition("@")
     if digest and not re.match(r"^sha256:[0-9a-f]{64}$", digest):
@@ -63,7 +63,7 @@ class Etiqueta:
 
 
 def etiqueta(texto) -> Optional[Etiqueta]:
-    m = _ETIQUETA.match(texto or "")
+    m = _ETIQUETA.fullmatch(texto or "")
     if not m:
         return None
     numeros = tuple(int(n) for n in m.group(2).split("."))
@@ -72,7 +72,7 @@ def etiqueta(texto) -> Optional[Etiqueta]:
     resto = m.group(3) or ""
     if re.match(r"^(19|20)\d{6}$", resto):
         return Etiqueta(texto, m.group(1), numeros, "", resto, False)
-    previa = any(_PREVIA.match(t) for t in re.split(r"[.\-_]", resto) if t) or bool(re.match(r"^(rc|a|b)\d+$", resto, re.I))
+    previa = any(_PREVIA.fullmatch(t) for t in re.split(r"[.\-_]", resto) if t) or bool(re.match(r"^(rc|a|b)\d+$", resto, re.I))
     return Etiqueta(texto, m.group(1), numeros, resto, "", previa)
 
 

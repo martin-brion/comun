@@ -5,6 +5,7 @@ import subprocess
 import time
 
 ALTAS = ("HIGH", "CRITICAL")
+MAX_VULNERABILIDADES = 50000      # más que eso no se recorta: se rechaza el informe entero
 
 
 def _correr(argv, tope):
@@ -17,20 +18,33 @@ def _correr(argv, tope):
 
 def resumir(informe, cves_kev):
     """De la salida JSON del escáner a cuentas: total, altas o críticas, con arreglo publicado, y las que figuran en KEV."""
-    if not isinstance(informe, dict) or not isinstance(informe.get("Results", []), list):
+    # Un informe sin la lista de resultados no prueba nada: no es «cero vulnerabilidades».
+    if not isinstance(informe, dict) or not isinstance(informe.get("Results"), list):
         raise ValueError("informe con otra forma")
     vistos = {}
-    for r in informe.get("Results") or []:
-        for v in (r.get("Vulnerabilities") or []) if isinstance(r, dict) else []:
-            if isinstance(v, dict) and isinstance(v.get("VulnerabilityID"), str):
-                previo = vistos.get(v["VulnerabilityID"], {})
-                vistos[v["VulnerabilityID"]] = {
-                    "alta": previo.get("alta", False) or v.get("Severity") in ALTAS,
-                    "arreglo": previo.get("arreglo", False) or bool(v.get("FixedVersion"))}
+    for r in informe["Results"]:
+        # Cualquier parte ilegible invalida la evidencia entera: un resultado roto no es un resultado limpio.
+        # Sin la clave o con null es «sin hallazgos» en ese objetivo, como lo escribe el escáner; cualquier otra cosa que
+        # no sea una lista ({}, false, 0, "") no se interpreta.
+        if not isinstance(r, dict) or not (r.get("Vulnerabilities") is None or isinstance(r["Vulnerabilities"], list)):
+            raise ValueError("resultado con otra forma")
+        for v in r.get("Vulnerabilities") or []:
+            if not isinstance(v, dict) or not isinstance(v.get("VulnerabilityID"), str):
+                raise ValueError("vulnerabilidad con otra forma")
+            if len(vistos) >= MAX_VULNERABILIDADES:
+                raise ValueError("demasiadas vulnerabilidades para decidir con ellas")
+            previo = vistos.get(v["VulnerabilityID"], {})
+            vistos[v["VulnerabilityID"]] = {
+                "alta": previo.get("alta", False) or v.get("Severity") in ALTAS,
+                "arreglo": previo.get("arreglo", False) or bool(v.get("FixedVersion"))}
     kev = sorted(i for i in vistos if i in cves_kev)
+    # Un KEV que el escáner encuentra en esta imagen, con una versión que lo arregla: es lo que el vigía llama
+    # «aplicabilidad verificada» (la falla está en lo que corre y hay arreglo). Sin arreglo, solo una persona mitiga.
     return {"estado": "ok", "motivo": "", "total": len(vistos), "altas": sum(1 for v in vistos.values() if v["alta"]),
-            "altas_con_arreglo": sum(1 for v in vistos.values() if v["alta"] and v["arreglo"]), "kev": kev[:50],
-            "kev_aplicable": False}
+            "altas_con_arreglo": sum(1 for v in vistos.values() if v["alta"] and v["arreglo"]), "kev": kev,
+            "kev_con_arreglo": [i for i in kev if vistos[i]["arreglo"]],
+            "kev_sin_arreglo": [i for i in kev if not vistos[i]["arreglo"]],
+            "kev_aplicable": any(vistos[i]["arreglo"] for i in kev)}
 
 
 def escanear(comando, imagenes, cves_kev, tope_s, correr=_correr, reloj=time.monotonic):

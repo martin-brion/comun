@@ -11,7 +11,8 @@ POR_DEFECTO = {"nivel": "nunca", "expuesto": False}
 _NOMBRE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _CLAVES = {"servidores", "propias", "componentes", "por_defecto", "maduracion_dias", "plazos_h", "fuentes", "escaner",
            "estado_dir", "registro_dir", "foto_vigencia_s", "ventana", "acciones", "playbooks", "max_por_ventana",
-           "espera_salud_s", "aviso"}
+           "espera_salud_s", "aviso", "ventana_urgente", "espera_reinicio_s", "maquinas", "repos", "sistema_plazo_h",
+           "pausa_max_dias"}
 _COMPONENTE = {"nivel", "expuesto", "linea", "base", "nota", "playbook"}
 # Los tipos de acción que el ejecutor sabe hacer, y las acciones con nombre que cada uno le pide a la instancia.
 PLAYBOOKS = {"imagen": ("respaldo_vigente", "aplicar_imagen", "verificar", "volver_imagen"),
@@ -19,12 +20,22 @@ PLAYBOOKS = {"imagen": ("respaldo_vigente", "aplicar_imagen", "verificar", "volv
                        "volver_imagen"),
              # Una imagen propia que se rehace igual, sobre la versión nueva de su base: la vuelta atrás es la imagen
              # anterior, armada sobre la base anterior, que la instancia conserva.
-             "propia": ("respaldo_vigente", "construir_propia", "aplicar_propia", "verificar", "volver_propia")}
+             "propia": ("respaldo_vigente", "construir_propia", "aplicar_propia", "verificar", "volver_propia"),
+             # El reinicio del servidor, para un kernel o una biblioteca que la rutina del sistema ya instaló. No tiene
+             # vuelta atrás: va último en la pasada y, si algo no vuelve, escala.
+             "reinicio": ("respaldo_vigente", "reiniciar", "verificar_servidor")}
 ACCIONES = {"respaldo_vigente": (), "aplicar_imagen": ("servicio", "referencia"), "verificar": ("servicio",),
             "volver_imagen": ("servicio", "referencia"), "respaldar_datos": ("servicio", "marca"),
             "restaurar_datos": ("servicio", "marca"), "construir_propia": ("servicio", "base"),
-            "aplicar_propia": ("servicio", "base"), "volver_propia": ("servicio", "base")}
+            "aplicar_propia": ("servicio", "base"), "volver_propia": ("servicio", "base"), "reiniciar": (),
+            "verificar_servidor": ()}
+# Huecos que una acción de un servicio puede usar además de los suyos: el proyecto de compose, cuando dos proyectos
+# tienen un servicio con el mismo nombre.
+OPCIONALES = {a: ("proyecto",) for a, h in ACCIONES.items() if "servicio" in h}
 _HORA = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_MAQUINA = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
+_REMOTO = re.compile(r"^https://[a-z0-9][a-z0-9.-]{0,199}(:\d{1,5})?/[A-Za-z0-9._/~-]{1,300}$")
+_RAMA = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
 
 
 class ConfigError(Exception):
@@ -62,9 +73,58 @@ def _plantilla(nombre, argv):
                     huecos.add(campo)
     except ValueError:
         raise ConfigError(f"acción {nombre}: llaves sin cerrar") from None
-    if huecos - set(ACCIONES[nombre]):
+    if huecos - set(ACCIONES[nombre]) - set(OPCIONALES.get(nombre, ())):
         raise ConfigError(f"acción {nombre}: hueco desconocido")
     return list(argv)
+
+
+def _comando(valor):
+    return isinstance(valor, list) and bool(valor) and all(isinstance(x, str) and x for x in valor)
+
+
+def _maquinas(m, servidores):
+    """El censo de máquinas virtuales: un archivo que deja la instancia (lo escribe el hipervisor) y las que se esperan."""
+    if m is None:
+        return None
+    if (not isinstance(m, dict) or set(m) - {"archivo", "vigencia_s", "esperadas"}
+            or not isinstance(m.get("archivo"), str) or not m["archivo"]):
+        raise ConfigError("maquinas: archivo, vigencia_s y esperadas")
+    vigencia = m.get("vigencia_s", 3600)
+    esperadas = m.get("esperadas", {})
+    if type(vigencia) is not int or vigencia <= 0 or not isinstance(esperadas, dict):
+        raise ConfigError("maquinas inválido")
+    limpias = {}
+    for nombre, e in esperadas.items():
+        if not _MAQUINA.fullmatch(str(nombre)) or not isinstance(e, dict) or set(e) - {"servidor", "apagada", "sin_vigia"}:
+            raise ConfigError(f"maquinas: {nombre} inválida")
+        servidor = e.get("servidor")
+        if servidor is not None and servidor not in servidores:
+            raise ConfigError(f"maquinas: {nombre} nombra un servidor desconocido")
+        if not isinstance(e.get("apagada", False), bool) or not isinstance(e.get("sin_vigia", False), bool):
+            raise ConfigError(f"maquinas: {nombre}: apagada y sin_vigia son sí o no")
+        if servidor is not None and e.get("sin_vigia"):
+            raise ConfigError(f"maquinas: {nombre}: tiene servidor o es sin_vigia, no las dos")
+        limpias[nombre] = {"servidor": servidor, "apagada": e.get("apagada", False), "sin_vigia": e.get("sin_vigia", False)}
+    return {"archivo": m["archivo"], "vigencia_s": vigencia, "esperadas": limpias}
+
+
+def _repos(lista, servidores):
+    """Repositorios montados (los addons de un Odoo, por ejemplo): el commit local contra la punta de su rama remota."""
+    if not isinstance(lista, list):
+        raise ConfigError("repos es una lista")
+    vistos, limpios = set(), []
+    for r in lista:
+        if (not isinstance(r, dict) or set(r) - {"nombre", "servidor", "local", "remoto", "rama"}
+                or not _NOMBRE.fullmatch(str(r.get("nombre"))) or r["nombre"] in vistos):
+            raise ConfigError("repos: cada uno con nombre único, servidor, local, remoto y rama")
+        if r.get("servidor") not in servidores or not _comando(r.get("local")):
+            raise ConfigError(f"repos {r['nombre']}: servidor conocido y local como comando en lista")
+        if (not isinstance(r.get("remoto"), str) or not _REMOTO.fullmatch(r["remoto"])
+                or not isinstance(r.get("rama"), str) or not _RAMA.fullmatch(r["rama"])):
+            raise ConfigError(f"repos {r['nombre']}: remoto https y rama válidos")
+        vistos.add(r["nombre"])
+        limpios.append({k: r[k] for k in ("nombre", "servidor", "local", "remoto", "rama")})
+    return limpios
 
 
 def validar(crudo):
@@ -75,7 +135,7 @@ def validar(crudo):
         raise ConfigError("falta la lista de servidores")
     vistos = set()
     for s in servidores:
-        if not isinstance(s, dict) or set(s) - {"nombre", "lector"} or not _NOMBRE.match(str(s.get("nombre"))):
+        if not isinstance(s, dict) or set(s) - {"nombre", "lector"} or not _NOMBRE.fullmatch(str(s.get("nombre"))):
             raise ConfigError("servidor inválido")
         if s["nombre"] in vistos:
             raise ConfigError("servidor repetido")
@@ -96,8 +156,9 @@ def validar(crudo):
     maduracion = crudo.get("maduracion_dias", 7)
     if type(maduracion) is not int or not 0 <= maduracion <= 90:
         raise ConfigError("maduracion_dias inválido")
-    fuentes = {"docker_hub": True, "registros": [], "kev": True, **crudo.get("fuentes", {})}
-    if (set(fuentes) != {"docker_hub", "registros", "kev"} or not isinstance(fuentes["registros"], list)
+    fuentes = {"docker_hub": True, "registros": [], "kev": True, "destinos": [], **crudo.get("fuentes", {})}
+    if (set(fuentes) != {"docker_hub", "registros", "kev", "destinos"} or not isinstance(fuentes["registros"], list)
+            or not isinstance(fuentes["destinos"], list) or not all(isinstance(d, str) for d in fuentes["destinos"])
             or not all(isinstance(r, str) for r in fuentes["registros"])
             or not isinstance(fuentes["docker_hub"], bool) or not isinstance(fuentes["kev"], bool)):
         raise ConfigError("fuentes inválido")
@@ -117,7 +178,7 @@ def validar(crudo):
             isinstance(ventana, dict) and set(ventana) == {"dias", "desde", "hasta"}
             and isinstance(ventana["dias"], list) and ventana["dias"]
             and all(type(d) is int and 0 <= d <= 6 for d in ventana["dias"])
-            and all(isinstance(ventana[k], str) and _HORA.match(ventana[k]) for k in ("desde", "hasta"))
+            and all(isinstance(ventana[k], str) and _HORA.fullmatch(ventana[k]) for k in ("desde", "hasta"))
             and ventana["desde"] < ventana["hasta"]):
         raise ConfigError("ventana inválida: días 0 (lunes) a 6 y un tramo desde < hasta en el mismo día")
     playbooks = crudo.get("playbooks", [])
@@ -135,6 +196,24 @@ def validar(crudo):
     espera = crudo.get("espera_salud_s", 180)
     if type(tope) is not int or not 1 <= tope <= 20 or type(espera) is not int or not 0 <= espera <= 3600:
         raise ConfigError("max_por_ventana o espera_salud_s inválido")
+    urgente = crudo.get("ventana_urgente")
+    if urgente is not None:
+        urgente = {"dias": list(range(7)), **urgente} if isinstance(urgente, dict) else urgente
+        if not (isinstance(urgente, dict) and set(urgente) == {"dias", "desde", "hasta"}
+                and isinstance(urgente["dias"], list) and urgente["dias"]
+                and all(type(d) is int and 0 <= d <= 6 for d in urgente["dias"])
+                and all(isinstance(urgente[k], str) and _HORA.fullmatch(urgente[k]) for k in ("desde", "hasta"))
+                and urgente["desde"] < urgente["hasta"]):
+            raise ConfigError("ventana_urgente inválida: un tramo desde < hasta en el mismo día y, si se dan, días 0 a 6")
+    reinicio = crudo.get("espera_reinicio_s", 1200)
+    if type(reinicio) is not int or not 60 <= reinicio <= 7200:
+        raise ConfigError("espera_reinicio_s inválido")
+    sistema_h = crudo.get("sistema_plazo_h", 72)
+    pausa = crudo.get("pausa_max_dias", 7)
+    if type(sistema_h) is not int or sistema_h <= 0 or type(pausa) is not int or not 1 <= pausa <= 90:
+        raise ConfigError("sistema_plazo_h o pausa_max_dias inválido")
+    maquinas = _maquinas(crudo.get("maquinas"), vistos)
+    repos = _repos(crudo.get("repos", []), vistos)
     aviso = crudo.get("aviso")
     if aviso is not None and not (isinstance(aviso, list) and aviso and all(isinstance(x, str) and x for x in aviso)):
         raise ConfigError("aviso es un comando en lista")
@@ -144,7 +223,8 @@ def validar(crudo):
             "maduracion_dias": maduracion, "plazos_h": plazos, "fuentes": fuentes, "escaner": escaner,
             "estado_dir": crudo["estado_dir"], "registro_dir": crudo["registro_dir"], "foto_vigencia_s": vigencia,
             "ventana": ventana, "acciones": limpias, "playbooks": list(playbooks), "max_por_ventana": tope,
-            "espera_salud_s": espera, "aviso": aviso}
+            "espera_salud_s": espera, "aviso": aviso, "ventana_urgente": urgente, "espera_reinicio_s": reinicio,
+            "sistema_plazo_h": sistema_h, "pausa_max_dias": pausa, "maquinas": maquinas, "repos": repos}
 
 
 def cargar(ruta):

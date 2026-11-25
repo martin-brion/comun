@@ -52,7 +52,21 @@ def _mtime(ruta):
         return None
 
 
-def sistema(correr=_correr, leer=_leer, listar=_listar, mtime=_mtime):
+def _arranque():
+    """Cuándo arrancó el servidor (segundos), de `btime` en /proc/stat: es lo que prueba que un reinicio ocurrió. Se lee
+    línea por línea porque antes viene la de interrupciones, que puede ser muy larga."""
+    try:
+        with open("/proc/stat", encoding="ascii", errors="replace") as f:
+            for linea in f:
+                if linea.startswith("btime "):
+                    valor = linea.split()[1]
+                    return int(valor) if valor.isdigit() and len(valor) <= 12 else None
+    except (OSError, IndexError):
+        pass
+    return None
+
+
+def sistema(correr=_correr, leer=_leer, listar=_listar, mtime=_mtime, arranque=_arranque):
     """Distribución, kernel, reinicio pedido y paquetes pendientes. Lo que no se pudo medir queda en None y en `errores`:
     nunca en cero."""
     errores = []
@@ -77,6 +91,7 @@ def sistema(correr=_correr, leer=_leer, listar=_listar, mtime=_mtime):
         errores.append("paquetes: no se pudo consultar el gestor de paquetes")
     auto = leer("/etc/apt/apt.conf.d/20auto-upgrades")
     return {
+        "arrancado": arranque(),
         "id": dist.get("ID"), "version": dist.get("VERSION_ID"), "nombre": dist.get("PRETTY_NAME"),
         "kernel_en_uso": kernel.strip()[:120] if rc == 0 else None,
         "kernels": None if nucleos is None else [n[len("vmlinuz-"):][:120] for n in nucleos if n.startswith("vmlinuz-")],
@@ -134,8 +149,8 @@ def docker(correr=_correr):
     return version.strip()[:60], contenedores, imagenes, errores
 
 
-def tomar(correr=_correr, leer=_leer, listar=_listar, mtime=_mtime, ahora=None):
-    s, e1 = sistema(correr, leer, listar, mtime)
+def tomar(correr=_correr, leer=_leer, listar=_listar, mtime=_mtime, ahora=None, arranque=_arranque):
+    s, e1 = sistema(correr, leer, listar, mtime, arranque)
     version, contenedores, imagenes, e2 = docker(correr)
     return {"esquema": ESQUEMA, "tomada": int(ahora if ahora is not None else time.time()), "sistema": s,
             "docker": {"version": version}, "contenedores": contenedores, "imagenes": imagenes, "errores": e1 + e2}

@@ -27,24 +27,30 @@ class FuenteError(Exception):
 class _SinCredencialAjena(urllib.request.HTTPRedirectHandler):
     """Al redirigir a otro servidor (un almacén de blobs), la autorización del registro no viaja."""
 
+    destinos = None
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         nuevo = super().redirect_request(req, fp, code, msg, headers, newurl)
         if nuevo is not None:
             if not newurl.startswith("https://"):
                 raise FuenteError("redirección fuera de https")
+            if self.destinos is not None and urllib.parse.urlsplit(newurl).netloc not in self.destinos:
+                raise FuenteError("redirección a un servidor no aprobado")
             if urllib.parse.urlsplit(newurl).netloc != urllib.parse.urlsplit(req.full_url).netloc:
                 nuevo.headers.pop("Authorization", None)
                 nuevo.unredirected_hdrs.pop("Authorization", None)
         return nuevo
 
 
-def pedir(url, cabeceras=None, tope=20, maximo=8 << 20):
+def pedir(url, cabeceras=None, tope=20, maximo=8 << 20, destinos=None):
     """(estado, cabeceras en minúscula, cuerpo). Lanza FuenteError si no hubo respuesta."""
     if not url.startswith("https://"):
         raise FuenteError("solo https")
     req = urllib.request.Request(url, headers={"User-Agent": "vigia", "Accept": "application/json", **(cabeceras or {})})
     try:
-        with urllib.request.build_opener(_SinCredencialAjena).open(req, timeout=tope) as r:
+        manejador = _SinCredencialAjena()
+        manejador.destinos = set(destinos) if destinos is not None else None
+        with urllib.request.build_opener(manejador).open(req, timeout=tope) as r:
             cuerpo = r.read(maximo + 1)
             if len(cuerpo) > maximo:
                 raise FuenteError("respuesta demasiado grande")
@@ -69,7 +75,7 @@ def _json(cuerpo):
 def docker_hub(repo, pedir=pedir):
     """Hasta 100 etiquetas, las más recientes: nombre, fecha de publicación y huellas (la del índice y las de cada
     plataforma). `hay_mas` dice que el repositorio tiene más etiquetas que las consultadas."""
-    if not _REPO.match(repo):
+    if not _REPO.fullmatch(repo):
         return _desconocido("repositorio inválido")
     try:
         estado, _, cuerpo = pedir(HUB.format(repo=repo))
@@ -78,12 +84,12 @@ def docker_hub(repo, pedir=pedir):
         datos = _json(cuerpo)
         etiquetas = []
         for t in datos["results"]:
-            if not isinstance(t.get("name"), str) or not _TAG.match(t["name"]):
+            if not isinstance(t.get("name"), str) or not _TAG.fullmatch(t["name"]):
                 continue
             huellas = {t.get("digest")} | {i.get("digest") for i in t.get("images") or [] if isinstance(i, dict)}
             etiquetas.append({"nombre": t["name"], "publicada": str(t.get("last_updated") or "")[:20] or None,
-                              "indice": t["digest"] if _DIGEST.match(str(t.get("digest"))) else None,
-                              "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.match(h))})
+                              "indice": t["digest"] if _DIGEST.fullmatch(str(t.get("digest"))) else None,
+                              "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.fullmatch(h))})
         return {"estado": "ok", "motivo": "", "etiquetas": etiquetas, "hay_mas": bool(datos.get("next"))}
     except FuenteError as e:
         return _desconocido(str(e))
@@ -93,7 +99,7 @@ def docker_hub(repo, pedir=pedir):
 
 def etiqueta_hub(repo, tag, pedir=pedir):
     """Fecha y huellas de una etiqueta puntual del índice público: {"publicada", "digests"} o None si no se pudo."""
-    if not _REPO.match(repo) or not _TAG.match(tag):
+    if not _REPO.fullmatch(repo) or not _TAG.fullmatch(tag):
         return None
     try:
         estado, _, cuerpo = pedir(f"https://hub.docker.com/v2/repositories/{repo}/tags/{tag}")
@@ -102,24 +108,32 @@ def etiqueta_hub(repo, tag, pedir=pedir):
         t = _json(cuerpo)
         huellas = {t.get("digest")} | {i.get("digest") for i in t.get("images") or [] if isinstance(i, dict)}
         return {"publicada": str(t.get("last_updated") or "")[:20] or None,
-                "indice": t["digest"] if _DIGEST.match(str(t.get("digest"))) else None,
-                "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.match(h))}
+                "indice": t["digest"] if _DIGEST.fullmatch(str(t.get("digest"))) else None,
+                "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.fullmatch(h))}
     except (FuenteError, TypeError, AttributeError):
         return None
 
 
-def _con_token(url, repo, pedir, cabeceras=None):
+def _destinos(registro, destinos):
+    """Adónde puede ir una consulta a un registro: el registro y los servidores que la instancia aprobó para él (el de
+    las fichas de acceso, el almacén de las capas)."""
+    return {registro} | set(destinos or ())
+
+
+def _con_token(url, repo, pedir, cabeceras=None, destinos=None):
     """GET a un registro OCI; si pide credencial, saca un token anónimo de lectura para ese repositorio y repite."""
-    estado, cab, cuerpo = pedir(url, cabeceras)
+    estado, cab, cuerpo = pedir(url, cabeceras, destinos=destinos)
     if estado != 401:
         return estado, cab, cuerpo, None
     reto = dict(re.findall(r'(\w+)="([^"]*)"', cab.get("www-authenticate", "")))
     if not reto.get("realm", "").startswith("https://"):
         raise FuenteError("el registro pide una credencial que no se puede obtener")
+    if destinos is not None and urllib.parse.urlsplit(reto["realm"]).netloc not in destinos:
+        raise FuenteError("el registro manda a pedir la ficha a un servidor no aprobado")
     consulta = {"scope": f"repository:{repo}:pull"}
     if reto.get("service"):
         consulta["service"] = reto["service"]
-    e2, _, c2 = pedir(reto["realm"] + "?" + urllib.parse.urlencode(consulta))
+    e2, _, c2 = pedir(reto["realm"] + "?" + urllib.parse.urlencode(consulta), destinos=destinos)
     if e2 != 200:
         raise FuenteError("el registro no dio acceso anónimo")
     datos = _json(c2)
@@ -127,24 +141,26 @@ def _con_token(url, repo, pedir, cabeceras=None):
     if not isinstance(token, str) or not token:
         raise FuenteError("el registro no dio acceso anónimo")
     auth = {"Authorization": "Bearer " + token}
-    estado, cab, cuerpo = pedir(url, {**(cabeceras or {}), **auth})
+    estado, cab, cuerpo = pedir(url, {**(cabeceras or {}), **auth}, destinos=destinos)
     return estado, cab, cuerpo, auth
 
 
-def registro_oci(registro, repo, pedir=pedir):
+def registro_oci(registro, repo, pedir=pedir, destinos=None):
     """Las etiquetas de un repositorio en un registro OCI. No trae fechas ni huellas: se piden aparte, de la candidata."""
-    if not _HOST.match(registro) or not _REPO.match(repo):
+    if not _HOST.fullmatch(registro) or not _REPO.fullmatch(repo):
         return _desconocido("referencia inválida")
     try:
         url, nombres, paginas = f"https://{registro}/v2/{repo}/tags/list?n=1000", [], 0
         while url and paginas < MAX_PAGINAS:
-            estado, cab, cuerpo, _ = _con_token(url, repo, pedir)
+            estado, cab, cuerpo, _ = _con_token(url, repo, pedir, destinos=_destinos(registro, destinos))
             if estado != 200:
                 return _desconocido(f"el registro respondió {estado}")
-            nombres += [t for t in (_json(cuerpo).get("tags") or []) if isinstance(t, str) and _TAG.match(t)]
+            nombres += [t for t in (_json(cuerpo).get("tags") or []) if isinstance(t, str) and _TAG.fullmatch(t)]
             paginas += 1
             m = re.search(r'<([^>]+)>;\s*rel="next"', cab.get("link", ""))
             url = urllib.parse.urljoin(f"https://{registro}/", m.group(1)) if m else None
+            if url and urllib.parse.urlsplit(url).netloc != registro:
+                return _desconocido("la paginación lleva a otro servidor")
         return {"estado": "ok", "motivo": "", "hay_mas": bool(url),
                 "etiquetas": [{"nombre": n, "publicada": None, "indice": None, "digests": []} for n in nombres]}
     except FuenteError as e:
@@ -153,13 +169,15 @@ def registro_oci(registro, repo, pedir=pedir):
         return _desconocido("respuesta con otra forma")
 
 
-def detalle_oci(registro, repo, tag, pedir=pedir):
+def detalle_oci(registro, repo, tag, pedir=pedir, destinos=None):
     """Fecha de creación y huella de una etiqueta de un registro OCI: {"publicada", "digests"} o None si no se pudo."""
-    if not _HOST.match(registro) or not _REPO.match(repo) or not _TAG.match(tag):
+    if not _HOST.fullmatch(registro) or not _REPO.fullmatch(repo) or not _TAG.fullmatch(tag):
         return None
     try:
         base = f"https://{registro}/v2/{repo}"
-        estado, cab, cuerpo, auth = _con_token(f"{base}/manifests/{tag}", repo, pedir, {"Accept": _MANIFIESTOS})
+        permitidos = _destinos(registro, destinos)
+        estado, cab, cuerpo, auth = _con_token(f"{base}/manifests/{tag}", repo, pedir, {"Accept": _MANIFIESTOS},
+                                               destinos=permitidos)
         if estado != 200:
             return None
         indice = cab.get("docker-content-digest")
@@ -169,23 +187,24 @@ def detalle_oci(registro, repo, tag, pedir=pedir):
             elegido = next((m for m in manifiesto["manifests"]
                             if (m.get("platform") or {}).get("os") == "linux"
                             and (m.get("platform") or {}).get("architecture") == "amd64"), None)
-            if elegido is None or not _DIGEST.match(str(elegido.get("digest"))):
+            if elegido is None or not _DIGEST.fullmatch(str(elegido.get("digest"))):
                 return None
             huellas.add(elegido["digest"])
-            estado, _, cuerpo = pedir(f"{base}/manifests/{elegido['digest']}", {"Accept": _MANIFIESTOS, **(auth or {})})
+            estado, _, cuerpo = pedir(f"{base}/manifests/{elegido['digest']}", {"Accept": _MANIFIESTOS, **(auth or {})},
+                                      destinos=permitidos)
             if estado != 200:
                 return None
             manifiesto = _json(cuerpo)
         config = str((manifiesto.get("config") or {}).get("digest"))
-        if not _DIGEST.match(config):
+        if not _DIGEST.fullmatch(config):
             return None
-        estado, _, cuerpo = pedir(f"{base}/blobs/{config}", auth)
+        estado, _, cuerpo = pedir(f"{base}/blobs/{config}", auth, destinos=permitidos)
         if estado != 200:
             return None
         creada = _json(cuerpo).get("created")
         return {"publicada": creada[:20] if isinstance(creada, str) else None,
-                "indice": indice if isinstance(indice, str) and _DIGEST.match(indice) else None,
-                "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.match(h))}
+                "indice": indice if isinstance(indice, str) and _DIGEST.fullmatch(indice) else None,
+                "digests": sorted(h for h in huellas if isinstance(h, str) and _DIGEST.fullmatch(h))}
     except (FuenteError, TypeError, AttributeError):
         return None
 

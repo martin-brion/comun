@@ -47,6 +47,14 @@ def tag(nombre, publicada="2027-01-01T00:00:00Z", *digests):
             "images": [{"digest": d} for d in digests[1:]]}
 
 
+def kev(red, *cves):
+    """La lista de fallas explotadas, para una red de mentira que no la tiene: sin ella, a los tres días hay aviso."""
+    from vigia import fuentes
+    red.respuestas.setdefault(fuentes.KEV, (200, {}, json.dumps(
+        {"vulnerabilities": [{"cveID": c} for c in (cves or ("CVE-2099-9999",))]}).encode()))
+    return red
+
+
 class Red:
     """Un `pedir` de mentira: responde por URL exacta o por prefijo, y anota todo lo que se le pidió."""
 

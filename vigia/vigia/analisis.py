@@ -13,6 +13,7 @@ from . import versiones as V
 BASE_NOMBRE = "org.opencontainers.image.base.name"
 BASE_HUELLA = "org.opencontainers.image.base.digest"
 VERSION = "org.opencontainers.image.version"
+SISTEMA = "sistema"                 # el nombre de la pieza del sistema del servidor, y de su componente en la configuración
 _HUELLA = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -68,7 +69,7 @@ def _resolver(tag, locales, etiquetas):
     return None, True
 
 
-def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar, detalle, ahora):
+def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar, detalle, ahora, fechas=None):
     comp = _config.componente(cfg, ref.pieza)
     servicios = sorted({f"{c['proyecto']}/{c['servicio']}" for c in contenedores if c["proyecto"] and c["servicio"]})
     contenedores = [c["nombre"] for c in contenedores]
@@ -112,10 +113,10 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
             publicada_texto, indice = publicada_texto or d.get("publicada"), indice or d.get("indice")
         publicada = _fecha(publicada_texto)
         hoy = rotulos.get(BASE_HUELLA, "")
-        if _HUELLA.match(hoy):
+        if _HUELLA.fullmatch(hoy):
             # Armada con la huella de su base en los rótulos: se sabe exactamente cuál tiene y se puede rehacer.
             r["base"] = "base " + hoy[7:19]
-            if fuente["estado"] != "ok" or not _HUELLA.match(str(indice or "")):
+            if fuente["estado"] != "ok" or not _HUELLA.fullmatch(str(indice or "")):
                 # Desconocido, no «propia»: con la fuente caída no se puede decir que su base está al día.
                 r.update(estado="desconocido", motivo=f"base {base.repo}:{base.tag}: no se pudo saber si cambió")
             elif indice == hoy:
@@ -173,6 +174,8 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
         r["candidata"] = _candidata(cfg, servidor, ref, comp, ref.tag or "latest", propuesta, "patch",
                                     hoy["publicada"], "", ahora, hoy.get("indice"), anterior)
         r["candidata"]["nota"] = "la misma etiqueta apunta hoy a una imagen más nueva; no se sabe cuál corre"
+        # Sin saber qué versión corre no se puede medir el salto: podría ser uno mayor. Se informa, no se aplica solo.
+        r["candidata"]["compuerta_version"] = "fuera: no se sabe qué versión corre; no se puede medir el salto"
         return r
     r["actual"] = actual.texto
     mejores = {}
@@ -183,8 +186,30 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
         if V.flotante(e["nombre"], nombres):
             continue
         tamano = V.salto(actual, o, comp.get("linea"))
-        if tamano not in mejores or o.clave > mejores[tamano][0].clave:
-            mejores[tamano] = (o, e)
+        mejores.setdefault(tamano, []).append((o, e))
+    limite = datetime.fromtimestamp(ahora, timezone.utc) - timedelta(days=cfg["maduracion_dias"])
+    nuevas = {}
+    for tamano, lista in mejores.items():
+        # La más nueva ya madura antes que la más nueva de todas: si salen parches seguido, uno maduro no espera para
+        # siempre al siguiente. Sin ninguna madura (o sin fechas), la más nueva. Un registro OCI no da fechas en la
+        # lista: se piden las de las tres más nuevas.
+        lista.sort(key=lambda x: x[0].clave, reverse=True)
+        if fechas is not None and all(x[1]["publicada"] is None for x in lista):
+            # Las fechas que el vigía ya conoce de corridas anteriores (en un registro OCI, la lista no las trae): así
+            # una versión vista hace días cuenta como madura aunque no esté entre las tres más nuevas.
+            conocidas = fechas(ref.registro, ref.repo)
+            for o, e in lista:
+                e["publicada"] = conocidas.get(o.texto)
+        if detalle is not None and not any(_fecha(x[1]["publicada"]) is not None and _fecha(x[1]["publicada"]) <= limite
+                                           for x in lista):
+            for o, e in lista[:3]:
+                d = detalle(ref.registro, ref.repo, o.texto) or {}
+                e["publicada"], e["indice"] = d.get("publicada") or e["publicada"], e.get("indice") or d.get("indice")
+                if _fecha(e["publicada"]) is not None and _fecha(e["publicada"]) <= limite:
+                    break
+        maduras = [x for x in lista if _fecha(x[1]["publicada"]) is not None and _fecha(x[1]["publicada"]) <= limite]
+        mejores[tamano] = maduras[0] if maduras else lista[0]
+        nuevas[tamano] = lista[0]
     if not mejores:
         r["estado"] = "al día"
         return r
@@ -196,9 +221,20 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
             publicada, indice = e["publicada"], e.get("indice")
             if (publicada is None or indice is None) and detalle is not None:
                 d = detalle(ref.registro, ref.repo, o.texto) or {}
-                publicada, indice = publicada or d.get("publicada"), indice or d.get("indice")
+                # El detalle manda sobre una fecha recordada: la etiqueta puede apuntar hoy a otra huella.
+                publicada, indice = d.get("publicada") or (None if d else publicada), indice or d.get("indice")
             r["candidata"] = _candidata(cfg, servidor, ref, comp, actual.texto, o.texto, tamano, publicada,
                                         actual.variante, ahora, indice, anterior)
+            o2, e2 = nuevas[tamano]
+            if o2.texto != o.texto:
+                # Para la urgencia: la más nueva de ese paso, que es la que más probablemente trae el arreglo. Se usa en
+                # lugar de la madura solo si hay una falla explotada, y el escáner la comprueba antes.
+                publicada2, indice2 = e2["publicada"], e2.get("indice")
+                if (publicada2 is None or indice2 is None) and detalle is not None:
+                    d = detalle(ref.registro, ref.repo, o2.texto) or {}
+                    publicada2, indice2 = publicada2 or d.get("publicada"), indice2 or d.get("indice")
+                r["candidata_urgente"] = _candidata(cfg, servidor, ref, comp, actual.texto, o2.texto, tamano, publicada2,
+                                                    actual.variante, ahora, indice2, anterior)
             break
     r["otras"] = [{"version": o.texto, "salto": t} for t, (o, _) in sorted(mejores.items(), key=lambda x: V.SALTOS.index(x[0]))]
     return r
@@ -225,7 +261,7 @@ def _candidata(cfg, servidor, ref, comp, actual, propuesta, tamano, publicada, v
             "indice": indice, "referencia": f"{ref.pieza}:{propuesta}@{indice}" if indice else None, "anterior": anterior}
 
 
-def piezas(cfg, servidor, foto, consultar, detalle=None, ahora=0):
+def piezas(cfg, servidor, foto, consultar, detalle=None, ahora=0, fechas=None):
     """Una entrada por imagen distinta que corre en el servidor."""
     if foto["contenedores"] is None:
         return None
@@ -234,20 +270,69 @@ def piezas(cfg, servidor, foto, consultar, detalle=None, ahora=0):
         por_imagen.setdefault((c["imagen_ref"], c["imagen_id"]), []).append(c)
     salida = []
     for (texto, imagen_id), usan in sorted(por_imagen.items()):
-        ref = V.referencia(texto)
         imagen = foto["imagenes"].get(imagen_id, {})
+        ref = None if es_id(texto, imagen_id) else V.referencia(texto)
         if ref is None:
-            # Un contenedor creado desde un ID de imagen: se usa la primera etiqueta local, si la hay.
-            ref = next((x for x in map(V.referencia, imagen.get("tags", [])) if x), None)
+            # Un contenedor creado desde un ID de imagen («sha256:…» o su forma corta): nunca se consulta como si fuera un
+            # repositorio público. Se usa una etiqueta local de esa imagen, una propia antes que cualquier otra; sin
+            # ninguna, queda «sin referencia».
+            locales = [t for t in imagen.get("tags", []) if V.referencia(t) and not es_id(t, imagen_id)]
+            elegida = next((t for t in locales if es_propia(cfg, V.referencia(t))), locales[0] if locales else None)
+            if elegida:
+                texto, ref = elegida, V.referencia(elegida)
         if ref is None:
             salida.append({"servidor": servidor, "pieza": "(sin referencia)", "contenedores": sorted(c["nombre"] for c in usan),
                            "etiqueta": "", "fijada": False, "actual": None, "estado": "desconocido",
                            "motivo": "el contenedor no dice de qué imagen salió", "candidata": None, "otras": [],
                            "notas": [], "nivel": "nunca", "expuesto": False, "propia": False, "creada": "",
-                           "imagen_id": imagen_id, "servicios": [], "playbook": None})
+                           "imagen_id": imagen_id, "playbook": None,
+                           # Sus servicios cuentan igual para saber si un nombre de servicio se repite en el servidor.
+                           "servicios": sorted({f"{c['proyecto']}/{c['servicio']}" for c in usan
+                                                if c["proyecto"] and c["servicio"]})})
             continue
-        salida.append(_pieza(cfg, servidor, ref, texto, imagen, imagen_id, usan, consultar, detalle, ahora))
+        salida.append(_pieza(cfg, servidor, ref, texto, imagen, imagen_id, usan, consultar, detalle, ahora, fechas))
+    salida.append(pieza_sistema(cfg, servidor, foto))
     return salida
+
+
+def es_id(texto, imagen_id):
+    """¿La referencia del contenedor es el ID de su imagen y no un nombre?"""
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", texto or ""):
+        return True
+    return bool(re.fullmatch(r"[0-9a-f]{12,64}", texto or "")) and str(imagen_id or "")[7:].startswith(texto)
+
+
+def pieza_sistema(cfg, servidor, foto):
+    """El sistema del servidor como una pieza más. Los paquetes los instala la rutina desatendida de la distribución; lo
+    que queda para el vigía es el reinicio que esa rutina pide (un kernel o una biblioteca nuevos). Su candidata no tiene
+    maduración: lo instalado ya está instalado."""
+    s = foto["sistema"]
+    comp = _config.componente(cfg, SISTEMA)
+    kernels = s["kernels"] or []
+    en_uso = s["kernel_en_uso"]
+    nuevo = bool(en_uso and kernels and en_uso in kernels and en_uso != _mayor(kernels))
+    r = {"servidor": servidor, "pieza": SISTEMA, "contenedores": [], "etiqueta": "", "fijada": True, "actual": en_uso,
+         "estado": "al día", "motivo": "", "candidata": None, "otras": [], "notas": [], "nivel": comp["nivel"],
+         "expuesto": comp["expuesto"], "propia": False, "creada": "", "imagen_id": None, "servicios": [],
+         "playbook": comp.get("playbook"), "sistema": True, "arrancado": s.get("arrancado")}
+    if en_uso is None:
+        r.update(estado="desconocido", motivo="no se pudo leer el kernel en uso")
+        return r
+    if not (s["reinicio_pedido"] or nuevo):
+        return r
+    propuesta = _mayor(kernels) if nuevo else f"{en_uso} reiniciado"
+    r["estado"] = "reinicio pedido"
+    if comp["nivel"] == "nunca":
+        compuerta = "fuera: la pieza no admite aplicación automática"
+    else:
+        compuerta = "pasaría"
+    r["candidata"] = {
+        "id": identificador(servidor, SISTEMA, "", propuesta), "servidor": servidor, "pieza": SISTEMA, "actual": en_uso,
+        "propuesta": propuesta, "salto": "patch", "publicada": None, "madura": None, "nivel": comp["nivel"],
+        "expuesto": comp["expuesto"], "compuerta_version": compuerta,
+        "nota": "kernel nuevo instalado sin usar" if nuevo else "el sistema pide reinicio", "indice": None,
+        "referencia": None, "anterior": None}
+    return r
 
 
 def sistema(foto):
