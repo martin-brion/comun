@@ -200,7 +200,8 @@ def _sistema(cfg, db, nombre, sis, ahora):
         estado.incidente(db, clave, "parches del sistema",
                          f"En {nombre} hay parches de seguridad del sistema pendientes desde hace más de "
                          f"{cfg['sistema_plazo_h']} h: la rutina desatendida no los está instalando.", ahora)
-    elif mas_viejo is None:
+    else:
+        # Ninguno pendiente con esa antigüedad: la rutina está avanzando, aunque haya parches recientes.
         estado.cerrar_incidente(db, clave, ahora)
 
 
@@ -226,7 +227,7 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes, leer_local=repos._c
             elif tipo == "docker_hub":
                 consultadas[clave] = fuentes.docker_hub(repo, pedir)
             else:
-                consultadas[clave] = fuentes.registro_oci(registro, repo, pedir)
+                consultadas[clave] = fuentes.registro_oci(registro, repo, pedir, cfg["fuentes"]["destinos"])
         return consultadas[clave]
 
     db = estado.abrir(cfg["estado_dir"])
@@ -236,7 +237,7 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes, leer_local=repos._c
             return None
         if registro == "docker.io":
             return fuentes.etiqueta_hub(repo, tag, pedir)
-        d = fuentes.detalle_oci(registro, repo, tag, pedir)
+        d = fuentes.detalle_oci(registro, repo, tag, pedir, cfg["fuentes"]["destinos"])
         if d and d.get("indice"):
             # Un registro OCI da la fecha en que se armó la imagen, que puede ser muy anterior a su publicación. La
             # maduración cuenta desde la más tardía entre esa y la primera vez que el vigía vio esa huella.
@@ -276,21 +277,35 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes, leer_local=repos._c
                                         for i in ids}
                 escaneo = None
                 if servidor["lector"] == "local" and cfg["escaner"]["comando"] and ids:
-                    escaneo = not any((vulnerabilidades.get(i) or {}).get("estado") == "ok" for i in ids)
+                    fallidas = [i for i in ids if (vulnerabilidades.get(i) or {}).get("estado") != "ok"]
+                    escaneo = bool(fallidas)
                 _durable(db, f"escaner-{servidor['nombre']}", escaneo, ahora, SIN_MEDIR_S, "escáner sin resultados",
-                         f"En {servidor['nombre']} el escáner no da resultados hace más de un día: no se sabe qué "
-                         "vulnerabilidades hay ni qué es urgente.")
+                         f"En {servidor['nombre']} el escáner no da resultado para alguna imagen hace más de un día: de "
+                         "esas no se sabe qué vulnerabilidades hay ni qué es urgente.")
+                # Las piezas públicas que hace días no se pueden comparar con lo publicado (salvo las que la
+                # configuración deja sin fuente a propósito).
+                ciegas = [p["pieza"] for p in piezas if p["estado"] == "desconocido" and not p.get("propia")
+                          and not p.get("sistema") and p["pieza"] != "(sin referencia)"
+                          and p["motivo"] not in ("registro sin fuente aprobada", "fuente apagada en la configuración")]
+                _durable(db, f"fuentes-{servidor['nombre']}", bool(ciegas) if con_fuentes else None, ahora, 3 * 86400,
+                         "piezas sin poder saber", f"En {servidor['nombre']} hay piezas que hace más de tres días no se "
+                         f"pueden comparar con lo publicado: {', '.join(sorted(set(ciegas))[:10])}.")
+                for p in piezas:
+                    p["vulnerabilidades"] = vulnerabilidades.get(p["imagen_id"]) if p["imagen_id"] else None
+                    urgencia = _urgencia(p) if kev["estado"] == "ok" else []
+                    if urgencia and p.get("candidata_urgente"):
+                        # Con una falla explotada se propone la más nueva del paso, no la madura: es la que trae el
+                        # arreglo, y el escáner lo comprueba antes de aplicar.
+                        p["candidata"] = p["candidata_urgente"]
+                    if urgencia:
+                        p["candidata"]["urgencia"] = urgencia
                 c = estado.registrar(db, servidor["nombre"], piezas, ahora)
                 for clave in cambios:
                     cambios[clave] += c[clave]
                 presentes = set()
                 for p in piezas:
-                    p["vulnerabilidades"] = vulnerabilidades.get(p["imagen_id"]) if p["imagen_id"] else None
-                    presentes |= _kev(cfg, db, servidor["nombre"], p, ahora)
+                    presentes |= _kev(cfg, db, servidor["nombre"], p, ahora, kev["estado"] == "ok")
                     if p.get("candidata"):
-                        urgencia = _urgencia(p)
-                        if urgencia:
-                            p["candidata"]["urgencia"] = urgencia
                         desde = estado.detectada(db, p["candidata"]["id"]) or ahora
                         p["candidata"]["detectada"] = desde
                         # El reinicio pendiente cuenta como un parche de seguridad: casi siempre lo es.
@@ -308,16 +323,8 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes, leer_local=repos._c
                     for clase in ("plazo", "fallo", "trabada"):
                         estado.cerrar_incidente(db, f"{clase}-{identificador}", ahora)
                     estado.desbloquear(db, identificador)
-                # Lo roto o a medias se cierra solo con evidencia de que la pieza corre: la candidata se cerró porque se
-                # la midió en la versión propuesta o al día. Una candidata descartada (por ejemplo, porque el contenedor
-                # quedó detenido y ya no figura) no prueba nada, y el sistema que ya no pide reinicio tampoco prueba que
-                # volvieron sus servicios: esos los cierra una persona (`resuelto`).
-                for identificador in c["cerradas"]:
-                    if (estado.candidata(db, identificador) or {}).get("pieza") != analisis.SISTEMA:
-                        for clase in ("roto", "ambiguo"):
-                            if estado.abierto(db, f"{clase}-{identificador}"):
-                                estado.cerrar_incidente(db, f"{clase}-{identificador}", ahora)
-                                estado.desbloquear_incidente(db, f"{clase}-{identificador}")
+                # Lo roto o a medias (`roto-`, `ambiguo-`) no lo cierra el observador: ver la versión no prueba que
+                # funcione ni que hayan vuelto todos sus servicios. Lo cierra una persona (`resuelto`).
             servidores.append({"nombre": servidor["nombre"], "estado": "ok", "motivo": "",
                                "sistema": sis, "piezas": piezas, "errores": foto["errores"]})
         _pausa(cfg, db, ahora)
@@ -348,14 +355,15 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes, leer_local=repos._c
         db.close()
 
 
-def _kev(cfg, db, servidor, p, ahora):
+def _kev(cfg, db, servidor, p, ahora, kev_ok=True):
     """Los incidentes de fallas con explotación conocida en una pieza expuesta: sin arreglo publicado (en seguida), o con
     arreglo pero sin una imagen nueva que el vigía pueda aplicar (pasado el plazo de urgencia). Con el escaneo
     desconocido, no cambia nada. Devuelve las claves de la pieza."""
     sufijo = analisis.identificador(servidor, p["pieza"], "kev", "")
     sin, img = f"kev:{servidor}:{sufijo}", f"kevimg:{servidor}:{sufijo}"
     v = p.get("vulnerabilidades") or {}
-    medido = v.get("estado") == "ok" and p["expuesto"]
+    # Hacen falta las dos mediciones: el escaneo y la lista KEV. Sin la lista, «no hay KEV» no se sabe.
+    medido = v.get("estado") == "ok" and p["expuesto"] and kev_ok
     if not p["expuesto"]:
         medido, v = True, {}
     if not medido:

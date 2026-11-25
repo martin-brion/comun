@@ -789,5 +789,210 @@ class ReinicioRoto(Unico):
         self.assertEqual(list(self.incidentes().values()), ["reinicio incompleto"])
 
 
+class SegundaRevision(Unico):
+    """Un caso por cada punto de la segunda vuelta de la revisión independiente, con su número."""
+
+    def correr(self, ahora=None, **k):
+        k.setdefault("escanear", lambda *a: {})
+        datos.kev(self.red)
+        return corrida.correr(self.cfg, ahora or self.ahora, tomar=self.s.tomar, pedir=self.red, **k)
+
+    # 1
+    def test_un_corte_al_cerrar_el_intento_no_pierde_el_incidente_ni_el_bloqueo(self):
+        from unittest import mock
+        from test_ejecutor import CON_DATOS
+        self.cfg = self.config(componentes={PG: {"nivel": "patch", "playbook": "datos"}},
+                               acciones={"principal": CON_DATOS}, playbooks=["datos"])
+        self.s.con_datos = {"db"}
+        self.s.falla_verificar = {"db"}
+        self.s.falla_restaurar = {"db"}
+
+        def cerrar(*a):
+            raise Corte()
+        with mock.patch.object(estado, "cerrar_intento", cerrar):
+            with self.assertRaises(Corte):
+                self.aplicar(presente=True)
+        self.assertEqual(list(self.incidentes().values()), ["vuelta atrás fallida"])
+        self.assertEqual(estado.bloqueados(self.db()), {"principal"})
+        self.assertIn("espera a una persona", self.aplicar(presente=True)["motivo"])
+
+    # 2
+    def test_el_observador_no_cierra_lo_que_la_recuperacion_escalo(self):
+        self.s.corte = ("despues", "db")
+        with self.assertRaises(Corte):
+            self.aplicar(presente=True)
+        self.s.corte = None
+        self.s.falla_verificar = {"db"}
+        self.aplicar(presente=True)
+        self.correr(AHORA + 3600)
+        self.assertEqual(list(self.incidentes().values()), ["a medias"])
+        self.assertEqual(estado.bloqueados(self.db()), {"principal"})
+
+    # 3
+    def test_un_resultado_interior_ilegible_invalida_el_escaneo(self):
+        for informe in ({"Results": [None]}, {"Results": [{"Vulnerabilities": "basura"}]},
+                        {"Results": [{"Vulnerabilities": [{"Severity": "HIGH"}]}]}):
+            r = escaner.escanear(["e"], ["x"], set(), 60, correr=lambda a, t, i=informe: (0, json.dumps(i).encode()))
+            self.assertEqual(r["x"]["estado"], "desconocido", informe)
+
+    # 4
+    def test_la_urgencia_propone_la_mas_nueva_y_la_comprueba_aunque_haya_una_madura(self):
+        self.red.hub("library/postgres", [tag("16.17", RECIENTE, H3), tag("16.16", VIEJA, H2), tag("16.15", VIEJA, H)])
+        self.red.respuestas[fuentes.KEV] = (200, {}, json.dumps({"vulnerabilities": [{"cveID": KEV}]}).encode())
+        self.cfg = self.config(componentes={PG: {"nivel": "patch", "playbook": "imagen", "expuesto": True}},
+                               escaner={"comando": ["e"]}, ventana_urgente={"desde": "07:00", "hasta": "09:00"})
+        estado.estrenar(self.db(), "imagen", "antes", AHORA)
+        self.ahora = AHORA + DIA
+        acta = self.aplicar(escanear=self.escanear())
+        self.assertEqual((acta["pasos"][0]["a"], acta["pasos"][0]["resultado"]), ("16.17", "aplicada"))
+        self.assertIn([f"{PG}:16.17@{H3}"], self.escaneos)
+
+    def test_una_madura_urgente_tambien_se_comprueba(self):
+        self.red.respuestas[fuentes.KEV] = (200, {}, json.dumps({"vulnerabilities": [{"cveID": KEV}]}).encode())
+        self.cfg = self.config(componentes={PG: {"nivel": "patch", "playbook": "imagen", "expuesto": True}},
+                               escaner={"comando": ["e"]})
+        (paso,) = self.aplicar(presente=True, escanear=self.escanear(vulnerable_la_nueva=True))["pasos"]
+        self.assertEqual([n for n, ok, _ in paso["compuertas"] if not ok], ["arreglo comprobado"])
+
+    # 5
+    def test_sin_la_lista_kev_no_se_cierra_un_kev_avisado(self):
+        self.cfg = self.config(componentes={PG: {"nivel": "patch", "expuesto": True}}, escaner={"comando": ["e"]})
+        sin = {"Results": [{"Vulnerabilities": [{"VulnerabilityID": KEV, "Severity": "CRITICAL"}]}]}
+        escanear = lambda c, ids, cves, t: {i: escaner.resumir(sin, cves) for i in ids}
+        self.red.respuestas[fuentes.KEV] = (200, {}, json.dumps({"vulnerabilities": [{"cveID": KEV}]}).encode())
+        self.correr(escanear=escanear)
+        self.red.respuestas[fuentes.KEV] = (503, {}, b"")
+        self.correr(AHORA + 60, escanear=escanear)
+        self.assertEqual(list(self.incidentes().values()), ["falla explotada sin arreglo"])
+
+    # 6
+    def test_un_servidor_bloqueado_no_le_quita_la_ventana_a_los_demas(self):
+        cfg = self.config(servidores=[{"nombre": "bloqueado"}, {"nombre": "principal"}],
+                          acciones={"bloqueado": ACCIONES, "principal": ACCIONES})
+        estado.escalar(self.db(), "x", "bloqueado", "roto-x", "vuelta atrás fallida", "t", AHORA)
+        datos.kev(self.red)
+        for semana in range(2):
+            self.ahora = AHORA + semana * 7 * DIA
+            acta = ejecutor.aplicar(cfg, presente=True, tomar=self.s.tomar, pedir=self.red, correr=self.s.correr,
+                                    reloj=self.reloj, dormir=lambda n: None, local=time.gmtime, escanear=lambda *a: {})
+        self.assertEqual((acta["servidor"], acta["pasos"][0]["resultado"]), ("principal", "aplicada"))
+
+    # 7
+    def test_en_oci_una_madura_ya_vista_no_espera_a_la_nueva(self):
+        reg, cfgd = "registro.ejemplo.test", "sha256:" + "e" * 64
+        huellas = {"1.0.0": H, "1.0.1": H2, "1.0.2": H3}
+
+        def registro(tags):
+            r = {f"https://{reg}/v2/equipo/forja/tags/list": (200, {}, json.dumps({"tags": tags}).encode()),
+                 f"https://{reg}/v2/equipo/forja/blobs/{cfgd}": (200, {}, b'{"created": "2026-01-01T00:00:00Z"}')}
+            for t in tags:
+                r[f"https://{reg}/v2/equipo/forja/manifests/{t}"] = (
+                    200, {"docker-content-digest": huellas[t]}, json.dumps({"config": {"digest": cfgd}}).encode())
+            return datos.kev(Red(r))
+        self.cfg = self.config(componentes={f"{reg}/equipo/forja": {"nivel": "patch"}})
+        self.s = Maquina({"forja": f"{reg}/equipo/forja:1.0.0@{H}"})
+        self.red = registro(["1.0.0", "1.0.1"])
+        self.correr(AHORA)
+        self.red = registro(["1.0.0", "1.0.1", "1.0.2"])
+        r = self.correr(AHORA + 10 * DIA)
+        forja = next(p for p in r["servidores"][0]["piezas"] if "forja" in p["pieza"])
+        self.assertEqual((forja["candidata"]["propuesta"], forja["candidata"]["compuerta_version"]), ("1.0.1", "pasaría"))
+
+    def test_una_candidata_que_vuelve_hereda_la_fecha(self):
+        self.red.hub("library/postgres", [tag("16.16", VIEJA, H2), tag("16.15", VIEJA, H)])
+        self.correr(AHORA)
+        self.red.hub("library/postgres", [tag("16.17", VIEJA, H3), tag("16.16", VIEJA, H2), tag("16.15", VIEJA, H)])
+        self.correr(AHORA + 3 * DIA)
+        self.red.hub("library/postgres", [tag("16.16", VIEJA, H2), tag("16.15", VIEJA, H)])
+        self.correr(AHORA + 5 * DIA)
+        self.assertEqual(self.candidata("16.16")["detectada"], AHORA)
+
+    # 8
+    def test_una_imagen_que_el_escaner_nunca_lee_se_avisa(self):
+        self.s = Maquina({"db": f"postgres:16.15@{H}", "web": f"ejemplo/web:1.0.0@{H3}"})
+        self.red.hub("ejemplo/web", [tag("1.0.0", VIEJA, H3)])
+        self.cfg = self.config(escaner={"comando": ["e"]})
+
+        def escanear(c, ids, cves, t):
+            return {i: (escaner.resumir(LIMPIO, cves) if n == 0 else {"estado": "desconocido", "motivo": "x"})
+                    for n, i in enumerate(ids)}
+        self.correr(escanear=escanear)
+        self.correr(AHORA + DIA + 60, escanear=escanear)
+        self.assertIn("escaner-principal", self.incidentes())
+
+    # 9
+    def test_una_pasada_que_falla_no_deja_latido(self):
+        from unittest import mock
+        with mock.patch.object(corrida, "_correr", side_effect=RuntimeError("roto")):
+            with self.assertRaises(RuntimeError):
+                self.aplicar(presente=True)
+        try:
+            with open(os.path.join(self.cfg["estado_dir"], "latido.json"), encoding="utf-8") as f:
+                self.assertNotIn("ejecutor", json.load(f))
+        except FileNotFoundError:
+            pass
+
+    # 10
+    def test_un_cierre_sin_avisar_no_se_pierde_si_el_incidente_vuelve(self):
+        cfg = self.config(aviso=["avisar"])
+        db = self.db()
+        estado.incidente(db, "pausa", "vigía en pausa", "texto", AHORA)
+        corrida.avisar(cfg, db, AHORA, lambda a, t: 0)
+        estado.cerrar_incidente(db, "pausa", AHORA + 60)
+        corrida.avisar(cfg, db, AHORA + 120, lambda a, t: 1)              # el cierre no salió
+        estado.incidente(db, "pausa", "vigía en pausa", "texto", AHORA + 180)
+        rutas = corrida.avisar(cfg, db, AHORA + 240, lambda a, t: 0)
+        self.assertTrue(any("resuelto" in os.path.basename(r) for r in rutas))
+
+    # 11
+    def test_la_ficha_de_acceso_no_se_pide_a_un_servidor_no_aprobado(self):
+        reg = "registro.ejemplo.test"
+        red = Red({f"https://{reg}/v2/equipo/forja/tags/list": (
+            401, {"www-authenticate": 'Bearer realm="https://ajeno.test/token",service="x"'}, b"")})
+        self.assertEqual(fuentes.registro_oci(reg, "equipo/forja", red)["estado"], "desconocido")
+        self.assertFalse(any("ajeno" in u for u, _ in red.pedidos))
+        red.respuestas["https://ajeno.test/token"] = (200, {}, b'{"token": "t"}')
+        fuentes.registro_oci(reg, "equipo/forja", red, ["ajeno.test"])
+        self.assertTrue(any("ajeno" in u for u, _ in red.pedidos))
+
+    # 12
+    def test_resuelto_completa_una_resolucion_que_quedo_a_medias(self):
+        db = self.db()
+        estado.escalar(db, "x", "principal", "roto-x", "vuelta atrás fallida", "t", AHORA)
+        estado.cerrar_incidente(db, "roto-x", AHORA + 1)                  # el corte cayó después de cerrar
+        self.assertEqual(estado.bloqueados(db), {"principal"})
+        self.assertTrue(ejecutor.resuelto(self.cfg, "roto-x", AHORA + 2))
+        self.assertEqual(estado.bloqueados(self.db()), set())
+        self.assertFalse(ejecutor.resuelto(self.cfg, "roto-x", AHORA + 3))
+
+    # 13
+    def test_la_alarma_de_parches_se_cierra_cuando_la_rutina_avanza(self):
+        original = self.s.tomar
+        paquete = ["liba"]
+
+        def tomar(servidor, ahora, vigencia):
+            t = original(servidor, ahora, vigencia)
+            t["foto"]["sistema"]["paquetes"] = [{"nombre": paquete[0], "de": "1", "a": "2", "origen": "x-security",
+                                                 "seguridad": True}]
+            return t
+        self.s.tomar = tomar
+        self.correr(AHORA)
+        self.correr(AHORA + 4 * DIA)
+        self.assertIn("sistema-seguridad-principal", self.incidentes())
+        paquete[0] = "libb"
+        self.correr(AHORA + 5 * DIA)
+        self.assertNotIn("sistema-seguridad-principal", self.incidentes())
+
+    # 14
+    def test_lo_aplicado_y_resuelto_tras_un_corte_cuenta_en_la_ventana(self):
+        self.s.corte = ("despues", "db")
+        with self.assertRaises(Corte):
+            self.aplicar(presente=True)
+        self.s.corte = None
+        self.aplicar(presente=True)
+        self.assertEqual(self.candidata()["estado"], "cerrada")
+        self.assertEqual(estado.ventana(self.db(), "2027-01-15")["aplicadas"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

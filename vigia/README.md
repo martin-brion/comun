@@ -142,7 +142,7 @@ hoja tenga vulnerabilidades, urgencia y KEV, el vigía corre en la hoja misma, c
 | `por_defecto` | Lo que vale para una pieza sin declarar. De fábrica: `nivel: nunca`, sin tipo de acción. |
 | `maduracion_dias` | Días desde la publicación antes de que una versión pase la compuerta. De fábrica, 7. |
 | `plazos_h` | Horas de plazo por clase: `kev_expuesto`, `alta_expuesta`, `alta_interna`, `ordinario`. |
-| `fuentes` | `docker_hub`, `kev` y la lista de `registros` OCI aprobados. Un registro fuera de la lista no se consulta. |
+| `fuentes` | `docker_hub`, `kev`, la lista de `registros` OCI aprobados y `destinos`: los servidores adonde puede mandar un registro aprobado (su ficha de acceso, el almacén de sus capas). Un registro fuera de la lista no se consulta; una redirección o una ficha fuera de `destinos`, tampoco. |
 | `escaner` | `comando` (lista; se le agrega la imagen) y `tope_s` de toda la pasada. Sin comando: «desconocido». |
 | `ventana` | `{dias, desde, hasta}`: días 0 (lunes) a 6 y un tramo del mismo día, en la hora del servidor. Sin ventana no aplica solo. |
 | `playbooks` | Tipos de acción habilitados. De fábrica, ninguno. |

@@ -85,9 +85,13 @@ def registrar(db, servidor, piezas, ahora):
                 db.execute("UPDATE candidatas SET actual = ?, actualizada = ?, datos = ? WHERE id = ?",
                            (c["actual"], ahora, json.dumps(c, sort_keys=True), c["id"]))
             else:
-                # Una candidata que se había cerrado o descartado vuelve a aparecer (por ejemplo, una vuelta atrás).
+                # Una candidata que se había cerrado o descartado vuelve a aparecer (por ejemplo, una vuelta atrás, o
+                # 16.16 → 16.17 → 16.16). Si otra de la misma pieza sigue abierta, hereda su fecha.
+                previa = db.execute("SELECT MIN(detectada) AS d FROM candidatas WHERE servidor = ? AND pieza = ? AND "
+                                    "estado IN (?,?,?) AND id != ?", (servidor, c["pieza"]) + ABIERTOS + (c["id"],)).fetchone()["d"]
                 db.execute("UPDATE candidatas SET estado = 'detectada', motivo = '', detectada = ?, actualizada = ?, "
-                           "actual = ?, datos = ? WHERE id = ?", (ahora, ahora, c["actual"], json.dumps(c, sort_keys=True), c["id"]))
+                           "actual = ?, datos = ? WHERE id = ?",
+                           (previa or ahora, ahora, c["actual"], json.dumps(c, sort_keys=True), c["id"]))
                 cambios["nuevas"].append(c["id"])
         abiertas = db.execute("SELECT id, pieza, propuesta FROM candidatas WHERE servidor = ? AND estado IN (?,?,?)",
                               (servidor,) + ABIERTOS).fetchall()
@@ -191,7 +195,12 @@ def contar_aplicada(db, fecha):
 def incidente(db, identificador, clase, texto, ahora):
     """Abre un incidente, una sola vez por identificador mientras siga abierto."""
     with db:
-        f = db.execute("SELECT cerrado FROM incidentes WHERE id = ?", (identificador,)).fetchone()
+        f = db.execute("SELECT * FROM incidentes WHERE id = ?", (identificador,)).fetchone()
+        if f is not None and f["cerrado"] is not None and f["avisado"] is not None and f["cierre_avisado"] is None:
+            # Su cierre todavía no se pudo avisar y ya vuelve a abrirse: el cierre sale igual, como noticia aparte.
+            db.execute("INSERT OR IGNORE INTO incidentes (id, clase, texto, abierto, cerrado, tipo) VALUES (?,?,?,?,?,?)",
+                       (f"{identificador}-resuelto-{f['cerrado']}", f"resuelto: {f['clase']}",
+                        f"Se había resuelto el {f['cerrado']} (hora en segundos): {f['texto']}", ahora, ahora, "noticia"))
         if f is None:
             db.execute("INSERT INTO incidentes (id, clase, texto, abierto) VALUES (?,?,?,?)", (identificador, clase, texto, ahora))
         elif f["cerrado"] is not None:
@@ -288,6 +297,40 @@ def cerrar_intento(db, n, valor, ahora):
 def intentos_abiertos(db):
     return [dict(f, datos=json.loads(f["datos"])) for f in db.execute("SELECT * FROM intentos WHERE resultado IS NULL "
                                                                        "ORDER BY n")]
+
+
+def escalar(db, candidata_id, servidor, incidente, clase, texto, ahora):
+    """En una sola transacción: la candidata espera a una persona, el incidente se abre y el servidor queda bloqueado.
+    Un corte no puede dejar una cosa sin la otra."""
+    with db:
+        db.execute("UPDATE candidatas SET estado = 'escalada', motivo = ?, actualizada = ? WHERE id = ?",
+                   (clase, ahora, candidata_id))
+        f = db.execute("SELECT cerrado FROM incidentes WHERE id = ?", (incidente,)).fetchone()
+        if f is None:
+            db.execute("INSERT INTO incidentes (id, clase, texto, abierto) VALUES (?,?,?,?)", (incidente, clase, texto, ahora))
+        elif f["cerrado"] is not None:
+            db.execute("UPDATE incidentes SET clase = ?, texto = ?, abierto = ?, cerrado = NULL, avisado = NULL, "
+                       "cierre_avisado = NULL WHERE id = ?", (clase, texto, ahora, incidente))
+        db.execute("INSERT OR IGNORE INTO marcas (clave, desde) VALUES (?,?)", (f"bloqueo:{servidor}:{incidente}", ahora))
+
+
+def resolver(db, incidente, candidata_id, ahora):
+    """Una persona dice que está resuelto, en una sola transacción: se cierra el incidente, se levanta su bloqueo y la
+    candidata escalada vuelve a la vista. Se puede repetir: completa una resolución que un corte dejó a medias. False si
+    no había nada que resolver."""
+    with db:
+        abierto = db.execute("SELECT 1 FROM incidentes WHERE id = ? AND cerrado IS NULL AND tipo = 'incidente'",
+                             (incidente,)).fetchone() is not None
+        claves = [f["clave"] for f in db.execute("SELECT clave FROM marcas WHERE clave LIKE 'bloqueo:%'").fetchall()
+                  if f["clave"].split(":", 2)[2] == incidente]
+        if not abierto and not claves:
+            return False
+        db.execute("UPDATE incidentes SET cerrado = ? WHERE id = ? AND cerrado IS NULL", (ahora, incidente))
+        for c in claves:
+            db.execute("DELETE FROM marcas WHERE clave = ?", (c,))
+        db.execute("UPDATE candidatas SET estado = 'detectada', motivo = 'resuelto por una persona', actualizada = ? "
+                   "WHERE id = ? AND estado = 'escalada'", (ahora, candidata_id))
+    return True
 
 
 def bloquear(db, servidor, incidente, ahora):

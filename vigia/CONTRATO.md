@@ -13,7 +13,9 @@ Versión del contrato: 0.5.0-dev.1. Lo que sigue no cambia sin decirlo en el ped
    un texto fuera de forma frena la foto entera.
 4. **Nada propio sale.** Una imagen cuyo nombre empieza con un prefijo de `propias` no se consulta en ninguna fuente.
    Hacia afuera solo va el nombre público de una imagen, por https y sin credenciales. Un registro que no está en
-   `fuentes.registros` no se consulta.
+   `fuentes.registros` no se consulta, y una consulta a un registro solo va a ese registro y a los servidores que la
+   instancia aprobó en `fuentes.destinos` (el de las fichas de acceso, el almacén de las capas): ni la paginación, ni
+   la ficha, ni una redirección llevan a otro.
 5. **El nivel de fábrica es `nunca`.** Una pieza admite aplicación automática solo si la instancia lo declara. Un salto
    mayor queda siempre afuera, cualquiera sea el nivel.
 6. **Sin maduración no pasa.** Una versión sin fecha de publicación conocida espera.
@@ -47,7 +49,8 @@ Versión del contrato: 0.5.0-dev.1. Lo que sigue no cambia sin decirlo en el ped
     solo (§7). Lo que se arregla solo no se avisa; lo que dura, sí. Un incidente avisado avisa también su cierre.
 17. **La urgencia no saltea compuertas: solo la espera.** Una candidata urgente no espera la maduración y entra en la
     ventana de urgencia; todas las demás compuertas valen igual, y además el escáner tiene que comprobar que la versión
-    propuesta ya no tiene esa falla. Solo para una imagen pública con el tipo `imagen` o `datos`.
+    propuesta ya no tiene esa falla (también si ya maduró). La propuesta urgente es la versión más nueva del paso, no la
+    madura. Solo para una imagen pública con el tipo `imagen` o `datos`, y con la lista KEV leída.
 18. **El reinicio no tiene vuelta atrás.** Va último en la pasada, nunca después de una falla de esa pasada, solo con el
     arranque medible, y si algo no vuelve escala.
 
@@ -112,7 +115,8 @@ base que es otra imagen propia no se consulta afuera. Con la fuente de la base c
 también con huella. Sin alguna de las dos el ejecutor no aplica.
 
 `id` es estable: sale del servidor, la pieza, la variante y la versión propuesta. `urgencia` (opcional) lista los KEV con
-arreglo que el escáner encontró en la imagen que corre, si la pieza está declarada `expuesto` y no es propia. `compuerta_version` vale `pasaría`,
+arreglo que el escáner encontró en la imagen que corre, si la pieza está declarada `expuesto` y no es propia. Un informe
+del escáner con cualquier parte ilegible es «desconocido» entero: nunca cuenta como limpio. `compuerta_version` vale `pasaría`,
 `espera: …` o `fuera: …`. Es la primera de las compuertas del ejecutor (§6).
 
 ## 4. Estados de una candidata
@@ -188,6 +192,11 @@ sistema responde: cambiar de servicio de respaldo es cambiar los comandos de `ac
 | `reiniciar` | — | Reinicia el servidor. Puede no volver (corta la conexión o al propio vigía): el vigía no mira su salida sino el arranque. |
 | `verificar_servidor` | — | Cero solo si el servidor quedó bien después de arrancar: lo que la instancia sepa que un reinicio puede romper (temporizadores sin próxima corrida, montajes, servicios fuera de compose). No cambia nada. |
 
+Un intento, sus incidentes y el bloqueo del servidor se escriben antes de dar el intento por cerrado; escalar (candidata,
+incidente y bloqueo) y `resuelto` (incidente, bloqueo y candidata) son cada uno una sola transacción, y `resuelto` se
+puede repetir para completar uno que un corte dejó a medias. Lo resuelto tras un corte cuenta en el tope de su ventana y,
+si fue por urgencia, deja su noticia. El latido del ejecutor lo deja solo una pasada que terminó sin error.
+
 Toda acción que recibe `{servicio}` puede recibir además `{proyecto}`, el proyecto de compose
 (`^[a-z0-9][a-z0-9_-]{0,62}$`). Si todas las acciones de servicio de un tipo lo usan, dos proyectos pueden tener un
 servicio con el mismo nombre; si no, el nombre del servicio tiene que ser único en todo el servidor.
@@ -256,19 +265,20 @@ cero; si no, se reintenta en la pasada siguiente. Lo que no se pudo medir no abr
 
 | Incidente | Se abre | Se cierra |
 |---|---|---|
-| `roto-<candidata>` | vuelta atrás fallida, algo a medias con datos, o un reinicio que no volvió bien. Bloquea el servidor | la candidata se cierra porque se la midió en la versión propuesta o al día (nunca por descartarse, y nunca la del sistema), o `resuelto` |
-| `ambiguo-<candidata>` | un corte dejó algo que no se puede acreditar. Bloquea el servidor | igual que `roto` |
+| `roto-<candidata>` | vuelta atrás fallida, algo a medias con datos, o un reinicio que no volvió bien. Bloquea el servidor | solo `resuelto`: ver la versión no prueba que funcione ni que hayan vuelto todos los servicios |
+| `ambiguo-<candidata>` | un corte dejó algo que no se puede acreditar. Bloquea el servidor | solo `resuelto` |
 | `fallo-<candidata>` | una candidata no entró en dos intentos | la candidata se cierra o se descarta |
 | `plazo-<candidata>` | se venció el plazo de la candidata | la candidata se cierra |
 | `estreno-<tipo>` | una candidata frena solo por el estreno | el tipo se estrena |
 | `trabada-<candidata>` | dos ventanas seguidas frena en la misma compuerta de persona (acciones, imagen fija, vuelta atrás, servicios, arranque medible) | pasa esa compuerta o la candidata se cierra |
 | `respaldo:<servidor>` | dos ventanas seguidas sin respaldo vigente | `respaldo_vigente` vuelve a dar cero |
 | `sin-medir-<servidor>` | más de un día sin poder medir el servidor o listar sus contenedores | se lo vuelve a medir |
-| `escaner-<servidor>` | con escáner configurado, más de un día sin ningún resultado | vuelve a dar alguno |
+| `escaner-<servidor>` | con escáner configurado, más de un día sin resultado para alguna imagen | da resultado para todas |
+| `fuentes-<servidor>` | más de tres días con piezas públicas que no se pueden comparar con lo publicado (salvo las que la configuración deja sin fuente) | se las vuelve a comparar |
 | `fuente-kev` | más de tres días sin poder leer la lista KEV | se la vuelve a leer |
 | `sistema-desatendidas-<servidor>` | la rutina desatendida del sistema está apagada | se prende |
-| `sistema-seguridad-<servidor>` | un mismo parche de seguridad del sistema (paquete y versión) pendiente por más de `sistema_plazo_h` | ya no hay |
-| `kev:<servidor>:<pieza>` | una pieza expuesta tiene un KEV sin arreglo publicado | un escaneo válido dice que ya no, o la pieza dejó de correr |
+| `sistema-seguridad-<servidor>` | un mismo parche de seguridad del sistema (paquete y versión) pendiente por más de `sistema_plazo_h` | ya no queda ninguno con esa antigüedad |
+| `kev:<servidor>:<pieza>` | una pieza expuesta tiene un KEV sin arreglo publicado | un escaneo válido y la lista KEV leída dicen que ya no, o la pieza dejó de correr |
 | `kevimg:<servidor>:<pieza>` | una pieza expuesta tiene un KEV con arreglo pero no hay imagen nueva que aplicar, por más que el plazo `kev_expuesto` | aparece la candidata, o lo anterior |
 | `pausa` | el archivo `PAUSA` tiene más de `pausa_max_dias` | se borra |
 | `maquinas-censo`, `maquina-…` | el censo de máquinas no se puede leer; una esperada falta o está detenida; una corre sin que la lea un servidor del vigía y sin estar excluida a propósito (`sin_vigia`) | deja de pasar |

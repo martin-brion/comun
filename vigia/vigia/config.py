@@ -156,8 +156,9 @@ def validar(crudo):
     maduracion = crudo.get("maduracion_dias", 7)
     if type(maduracion) is not int or not 0 <= maduracion <= 90:
         raise ConfigError("maduracion_dias inválido")
-    fuentes = {"docker_hub": True, "registros": [], "kev": True, **crudo.get("fuentes", {})}
-    if (set(fuentes) != {"docker_hub", "registros", "kev"} or not isinstance(fuentes["registros"], list)
+    fuentes = {"docker_hub": True, "registros": [], "kev": True, "destinos": [], **crudo.get("fuentes", {})}
+    if (set(fuentes) != {"docker_hub", "registros", "kev", "destinos"} or not isinstance(fuentes["registros"], list)
+            or not isinstance(fuentes["destinos"], list) or not all(isinstance(d, str) for d in fuentes["destinos"])
             or not all(isinstance(r, str) for r in fuentes["registros"])
             or not isinstance(fuentes["docker_hub"], bool) or not isinstance(fuentes["kev"], bool)):
         raise ConfigError("fuentes inválido")

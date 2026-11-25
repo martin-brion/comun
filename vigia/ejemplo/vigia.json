@@ -61,7 +61,11 @@
     "registros": [
       "registro.ejemplo.test"
     ],
-    "kev": true
+    "kev": true,
+    "destinos": [
+      "auth.registro.ejemplo.test",
+      "capas.registro.ejemplo.test"
+    ]
   },
   "escaner": {
     "comando": [

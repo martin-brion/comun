@@ -188,12 +188,21 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
         tamano = V.salto(actual, o, comp.get("linea"))
         mejores.setdefault(tamano, []).append((o, e))
     limite = datetime.fromtimestamp(ahora, timezone.utc) - timedelta(days=cfg["maduracion_dias"])
+    nuevas = {}
     for tamano, lista in mejores.items():
         # La más nueva ya madura antes que la más nueva de todas: si salen parches seguido, uno maduro no espera para
-        # siempre al siguiente. Sin ninguna madura (o sin fechas), la más nueva.
+        # siempre al siguiente. Sin ninguna madura (o sin fechas), la más nueva. Un registro OCI no da fechas en la
+        # lista: se piden las de las tres más nuevas.
         lista.sort(key=lambda x: x[0].clave, reverse=True)
+        if detalle is not None and all(x[1]["publicada"] is None for x in lista):
+            for o, e in lista[:3]:
+                d = detalle(ref.registro, ref.repo, o.texto) or {}
+                e["publicada"], e["indice"] = d.get("publicada"), e.get("indice") or d.get("indice")
+                if _fecha(e["publicada"]) is not None and _fecha(e["publicada"]) <= limite:
+                    break
         maduras = [x for x in lista if _fecha(x[1]["publicada"]) is not None and _fecha(x[1]["publicada"]) <= limite]
         mejores[tamano] = maduras[0] if maduras else lista[0]
+        nuevas[tamano] = lista[0]
     if not mejores:
         r["estado"] = "al día"
         return r
@@ -208,6 +217,16 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
                 publicada, indice = publicada or d.get("publicada"), indice or d.get("indice")
             r["candidata"] = _candidata(cfg, servidor, ref, comp, actual.texto, o.texto, tamano, publicada,
                                         actual.variante, ahora, indice, anterior)
+            o2, e2 = nuevas[tamano]
+            if o2.texto != o.texto:
+                # Para la urgencia: la más nueva de ese paso, que es la que más probablemente trae el arreglo. Se usa en
+                # lugar de la madura solo si hay una falla explotada, y el escáner la comprueba antes.
+                publicada2, indice2 = e2["publicada"], e2.get("indice")
+                if (publicada2 is None or indice2 is None) and detalle is not None:
+                    d = detalle(ref.registro, ref.repo, o2.texto) or {}
+                    publicada2, indice2 = publicada2 or d.get("publicada"), indice2 or d.get("indice")
+                r["candidata_urgente"] = _candidata(cfg, servidor, ref, comp, actual.texto, o2.texto, tamano, publicada2,
+                                                    actual.variante, ahora, indice2, anterior)
             break
     r["otras"] = [{"version": o.texto, "salto": t} for t, (o, _) in sorted(mejores.items(), key=lambda x: V.SALTOS.index(x[0]))]
     return r
