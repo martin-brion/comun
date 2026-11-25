@@ -69,7 +69,7 @@ def _resolver(tag, locales, etiquetas):
     return None, True
 
 
-def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar, detalle, ahora):
+def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar, detalle, ahora, fechas=None):
     comp = _config.componente(cfg, ref.pieza)
     servicios = sorted({f"{c['proyecto']}/{c['servicio']}" for c in contenedores if c["proyecto"] and c["servicio"]})
     contenedores = [c["nombre"] for c in contenedores]
@@ -194,10 +194,17 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
         # siempre al siguiente. Sin ninguna madura (o sin fechas), la más nueva. Un registro OCI no da fechas en la
         # lista: se piden las de las tres más nuevas.
         lista.sort(key=lambda x: x[0].clave, reverse=True)
-        if detalle is not None and all(x[1]["publicada"] is None for x in lista):
+        if fechas is not None and all(x[1]["publicada"] is None for x in lista):
+            # Las fechas que el vigía ya conoce de corridas anteriores (en un registro OCI, la lista no las trae): así
+            # una versión vista hace días cuenta como madura aunque no esté entre las tres más nuevas.
+            conocidas = fechas(ref.registro, ref.repo)
+            for o, e in lista:
+                e["publicada"] = conocidas.get(o.texto)
+        if detalle is not None and not any(_fecha(x[1]["publicada"]) is not None and _fecha(x[1]["publicada"]) <= limite
+                                           for x in lista):
             for o, e in lista[:3]:
                 d = detalle(ref.registro, ref.repo, o.texto) or {}
-                e["publicada"], e["indice"] = d.get("publicada"), e.get("indice") or d.get("indice")
+                e["publicada"], e["indice"] = d.get("publicada") or e["publicada"], e.get("indice") or d.get("indice")
                 if _fecha(e["publicada"]) is not None and _fecha(e["publicada"]) <= limite:
                     break
         maduras = [x for x in lista if _fecha(x[1]["publicada"]) is not None and _fecha(x[1]["publicada"]) <= limite]
@@ -214,7 +221,8 @@ def _pieza(cfg, servidor, ref, texto, imagen, imagen_id, contenedores, consultar
             publicada, indice = e["publicada"], e.get("indice")
             if (publicada is None or indice is None) and detalle is not None:
                 d = detalle(ref.registro, ref.repo, o.texto) or {}
-                publicada, indice = publicada or d.get("publicada"), indice or d.get("indice")
+                # El detalle manda sobre una fecha recordada: la etiqueta puede apuntar hoy a otra huella.
+                publicada, indice = d.get("publicada") or (None if d else publicada), indice or d.get("indice")
             r["candidata"] = _candidata(cfg, servidor, ref, comp, actual.texto, o.texto, tamano, publicada,
                                         actual.variante, ahora, indice, anterior)
             o2, e2 = nuevas[tamano]
@@ -253,7 +261,7 @@ def _candidata(cfg, servidor, ref, comp, actual, propuesta, tamano, publicada, v
             "indice": indice, "referencia": f"{ref.pieza}:{propuesta}@{indice}" if indice else None, "anterior": anterior}
 
 
-def piezas(cfg, servidor, foto, consultar, detalle=None, ahora=0):
+def piezas(cfg, servidor, foto, consultar, detalle=None, ahora=0, fechas=None):
     """Una entrada por imagen distinta que corre en el servidor."""
     if foto["contenedores"] is None:
         return None
@@ -282,7 +290,7 @@ def piezas(cfg, servidor, foto, consultar, detalle=None, ahora=0):
                            "servicios": sorted({f"{c['proyecto']}/{c['servicio']}" for c in usan
                                                 if c["proyecto"] and c["servicio"]})})
             continue
-        salida.append(_pieza(cfg, servidor, ref, texto, imagen, imagen_id, usan, consultar, detalle, ahora))
+        salida.append(_pieza(cfg, servidor, ref, texto, imagen, imagen_id, usan, consultar, detalle, ahora, fechas))
     salida.append(pieza_sistema(cfg, servidor, foto))
     return salida
 

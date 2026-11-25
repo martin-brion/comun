@@ -36,8 +36,8 @@ Versión del contrato: 0.5.0-dev.1. Lo que sigue no cambia sin decirlo en el ped
     sano y pasó `verificar`.
 12. **Un corte no se resuelve repitiendo.** Cada intento sobre una candidata queda abierto, aparte del diario, desde
     antes de su primer paso hasta que termina: un corte ENTRE dos pasos también se encuentra. Lo que quedó a medias se
-    mide: si corre sano lo anterior en todos sus servicios, no aplicado; si corre sano lo nuevo, se lo **verifica**
-    (`verificar`) y recién entonces está hecho; si no, se escala y en ese servidor no se aplica nada más hasta que una
+    mide: si corre sano lo anterior en todos sus servicios y verifica, quedó como estaba; si corre sano lo nuevo, se lo
+    **verifica** (`verificar`) y recién entonces está hecho; si no, se escala y en ese servidor no se aplica nada más hasta que una
     persona diga que está resuelto (`resuelto`). Ese bloqueo sobrevive entre pasadas.
 13. **Sin vuelta atrás exacta no se aplica.** Hace falta la referencia con huella de lo que corre hoy.
     Una pieza con datos, además, se copia antes bajo una marca de ese intento, y solo esa copia se repone.
@@ -93,7 +93,7 @@ pieza hereda su fecha de detección: el plazo no vuelve a empezar.
 
 **La fecha de publicación** es la del índice público, o, en otro registro OCI, la más tardía entre la fecha de armado de
 la imagen y la primera vez que el vigía vio esa huella: un registro solo da la fecha de armado, que puede ser muy
-anterior a la de publicación.
+anterior a la de publicación. Las fechas ya conocidas de corridas anteriores cuentan al elegir la versión madura.
 
 **Una imagen propia** no se consulta afuera: se consulta su base. Si la imagen dice en sus rótulos sobre qué base se armó,
 con nombre y huella (`org.opencontainers.image.base.name` y `org.opencontainers.image.base.digest`), y esa etiqueta de la
@@ -116,7 +116,8 @@ también con huella. Sin alguna de las dos el ejecutor no aplica.
 
 `id` es estable: sale del servidor, la pieza, la variante y la versión propuesta. `urgencia` (opcional) lista los KEV con
 arreglo que el escáner encontró en la imagen que corre, si la pieza está declarada `expuesto` y no es propia. Un informe
-del escáner con cualquier parte ilegible es «desconocido» entero: nunca cuenta como limpio. `compuerta_version` vale `pasaría`,
+del escáner con cualquier parte ilegible es «desconocido» entero: nunca cuenta como limpio (`Vulnerabilities` ausente o
+`null` es «sin hallazgos» en ese objetivo; cualquier otra cosa que no sea una lista, no). `compuerta_version` vale `pasaría`,
 `espera: …` o `fuera: …`. Es la primera de las compuertas del ejecutor (§6).
 
 ## 4. Estados de una candidata

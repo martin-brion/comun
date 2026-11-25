@@ -994,5 +994,112 @@ class SegundaRevision(Unico):
         self.assertEqual(estado.ventana(self.db(), "2027-01-15")["aplicadas"], 1)
 
 
+class TerceraRevision(Unico):
+    """Un caso por cada punto pendiente de la tercera vuelta, con su número."""
+
+    def correr(self, ahora=None, **k):
+        k.setdefault("escanear", lambda *a: {})
+        datos.kev(self.red)
+        return corrida.correr(self.cfg, ahora or self.ahora, tomar=self.s.tomar, pedir=self.red, **k)
+
+    def registro(self, tags, sin_detalle=()):
+        reg, cfgd = "registro.ejemplo.test", "sha256:" + "e" * 64
+        huellas = {t: "sha256:" + f"{n + 1:064x}" for n, t in enumerate(["1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4"])}
+        r = {f"https://{reg}/v2/equipo/forja/tags/list": (200, {}, json.dumps({"tags": tags}).encode()),
+             f"https://{reg}/v2/equipo/forja/blobs/{cfgd}": (200, {}, b'{"created": "2026-01-01T00:00:00Z"}')}
+        for t in tags:
+            if t not in sin_detalle:
+                r[f"https://{reg}/v2/equipo/forja/manifests/{t}"] = (
+                    200, {"docker-content-digest": huellas[t]}, json.dumps({"config": {"digest": cfgd}}).encode())
+        self.cfg = self.config(componentes={f"{reg}/equipo/forja": {"nivel": "patch"}})
+        self.s = Maquina({"forja": f"{reg}/equipo/forja:1.0.0@{huellas['1.0.0']}"})
+        self.red = datos.kev(Red(r))
+
+    # 1
+    def test_una_vuelta_atras_que_no_verifica_y_un_corte_igual_escalan(self):
+        from unittest import mock
+        original = self.s.correr
+        self.s.correr = lambda argv, t: 1 if argv[1] == "verificar" else original(argv, t)
+
+        def escalar(*a, **k):
+            raise Corte()
+        with mock.patch.object(estado, "escalar", escalar):
+            with self.assertRaises(Corte):
+                self.aplicar(presente=True)
+        self.aplicar(presente=True)
+        self.assertEqual(list(self.incidentes().values()), ["a medias"])
+        self.assertEqual(estado.bloqueados(self.db()), {"principal"})
+
+    # 2
+    def test_vulnerabilidades_con_otra_forma_no_son_cero(self):
+        for raro in ({}, False, 0, ""):
+            r = escaner.escanear(["e"], ["x"], set(), 60, correr=lambda a, t, v=raro: (
+                0, json.dumps({"Results": [{"Vulnerabilities": v}]}).encode()))
+            self.assertEqual(r["x"]["estado"], "desconocido", raro)
+        r = escaner.escanear(["e"], ["x"], set(), 60, correr=lambda a, t: (0, b'{"Results": [{"Vulnerabilities": null}]}'))
+        self.assertEqual(r["x"]["estado"], "ok")
+
+    # 3
+    def test_en_oci_una_madura_vista_antes_no_espera_aunque_salgan_tres_mas(self):
+        self.registro(["1.0.0", "1.0.1"])
+        self.correr(AHORA)
+        self.registro(["1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4"])
+        r = self.correr(AHORA + 10 * DIA)
+        forja = next(p for p in r["servidores"][0]["piezas"] if "forja" in p["pieza"])
+        self.assertEqual((forja["candidata"]["propuesta"], forja["candidata"]["compuerta_version"]), ("1.0.1", "pasaría"))
+
+    # 4
+    def test_un_detalle_que_falla_por_dias_se_avisa(self):
+        self.registro(["1.0.0", "1.0.1"], sin_detalle=("1.0.1",))
+        self.correr(AHORA)
+        self.correr(AHORA + 4 * DIA)
+        self.assertIn("fuentes-principal", self.incidentes())
+
+    # 5
+    def test_escalar_no_pierde_un_cierre_pendiente(self):
+        cfg = self.config(aviso=["avisar"])
+        db = self.db()
+        estado.escalar(db, "x", "principal", "roto-x", "vuelta atrás fallida", "t", AHORA)
+        corrida.avisar(cfg, db, AHORA, lambda a, t: 0)
+        estado.resolver(db, "roto-x", "x", AHORA + 60)
+        corrida.avisar(cfg, db, AHORA + 120, lambda a, t: 1)
+        estado.escalar(db, "x", "principal", "roto-x", "vuelta atrás fallida", "t", AHORA + 180)
+        rutas = corrida.avisar(cfg, db, AHORA + 240, lambda a, t: 0)
+        self.assertTrue(any("resuelto" in os.path.basename(r) for r in rutas))
+
+    # 6
+    def test_cada_peticion_a_un_registro_lleva_sus_destinos(self):
+        llamadas = []
+
+        def pedir(url, cabeceras=None, destinos=None, **_):
+            llamadas.append((url, destinos))
+            if "/token" in url:
+                return 200, {}, b'{"token": "t"}'
+            if (cabeceras or {}).get("Authorization"):
+                return 200, {}, b'{"tags": ["1.0.0"]}'
+            return 401, {"www-authenticate": 'Bearer realm="https://registro.ejemplo.test/token"'}, b""
+        fuentes.registro_oci("registro.ejemplo.test", "equipo/forja", pedir)
+        self.assertEqual(len(llamadas), 3)
+        self.assertTrue(all(d == {"registro.ejemplo.test"} for _, d in llamadas))
+
+    # 7
+    def test_un_corte_al_cerrar_no_cuenta_dos_veces_ni_avisa_dos_veces(self):
+        from unittest import mock
+        original = estado.cerrar_intento
+        veces = []
+
+        def cerrar(*a):
+            if not veces:
+                veces.append(1)
+                raise Corte()
+            return original(*a)
+        with mock.patch.object(estado, "cerrar_intento", cerrar):
+            with self.assertRaises(Corte):
+                self.aplicar(presente=True)
+            self.aplicar(presente=True)
+        self.assertEqual(estado.ventana(self.db(), "2027-01-15")["aplicadas"], 1)
+        self.assertEqual(self.candidata()["estado"], "cerrada")
+
+
 if __name__ == "__main__":
     unittest.main()

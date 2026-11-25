@@ -24,7 +24,9 @@ def resumir(informe, cves_kev):
     vistos = {}
     for r in informe["Results"]:
         # Cualquier parte ilegible invalida la evidencia entera: un resultado roto no es un resultado limpio.
-        if not isinstance(r, dict) or not isinstance(r.get("Vulnerabilities") or [], list):
+        # Sin la clave o con null es «sin hallazgos» en ese objetivo, como lo escribe el escáner; cualquier otra cosa que
+        # no sea una lista ({}, false, 0, "") no se interpreta.
+        if not isinstance(r, dict) or not (r.get("Vulnerabilities") is None or isinstance(r["Vulnerabilities"], list)):
             raise ValueError("resultado con otra forma")
         for v in r.get("Vulnerabilities") or []:
             if not isinstance(v, dict) or not isinstance(v.get("VulnerabilityID"), str):

@@ -195,12 +195,7 @@ def contar_aplicada(db, fecha):
 def incidente(db, identificador, clase, texto, ahora):
     """Abre un incidente, una sola vez por identificador mientras siga abierto."""
     with db:
-        f = db.execute("SELECT * FROM incidentes WHERE id = ?", (identificador,)).fetchone()
-        if f is not None and f["cerrado"] is not None and f["avisado"] is not None and f["cierre_avisado"] is None:
-            # Su cierre todavía no se pudo avisar y ya vuelve a abrirse: el cierre sale igual, como noticia aparte.
-            db.execute("INSERT OR IGNORE INTO incidentes (id, clase, texto, abierto, cerrado, tipo) VALUES (?,?,?,?,?,?)",
-                       (f"{identificador}-resuelto-{f['cerrado']}", f"resuelto: {f['clase']}",
-                        f"Se había resuelto el {f['cerrado']} (hora en segundos): {f['texto']}", ahora, ahora, "noticia"))
+        f = _preservar_cierre(db, identificador, ahora)
         if f is None:
             db.execute("INSERT INTO incidentes (id, clase, texto, abierto) VALUES (?,?,?,?)", (identificador, clase, texto, ahora))
         elif f["cerrado"] is not None:
@@ -299,13 +294,43 @@ def intentos_abiertos(db):
                                                                        "ORDER BY n")]
 
 
+def _preservar_cierre(db, identificador, ahora):
+    """Antes de reabrir un incidente: si su cierre todavía no se pudo avisar, sale igual, como noticia aparte. Devuelve la
+    fila (o None). Va dentro de la transacción de quien reabre."""
+    f = db.execute("SELECT * FROM incidentes WHERE id = ?", (identificador,)).fetchone()
+    if f is not None and f["cerrado"] is not None and f["avisado"] is not None and f["cierre_avisado"] is None:
+        db.execute("INSERT OR IGNORE INTO incidentes (id, clase, texto, abierto, cerrado, tipo) VALUES (?,?,?,?,?,?)",
+                   (f"{identificador}-resuelto-{f['cerrado']}", f"resuelto: {f['clase']}",
+                    f"Se había resuelto (hora {f['cerrado']}): {f['texto']}", ahora, ahora, "noticia"))
+    return f
+
+
+def contar_una_vez(db, fecha, intento, ahora):
+    """Cuenta una aplicación en el tope de su ventana una sola vez por intento, aunque un corte haga repetir el cierre."""
+    with db:
+        nueva = db.execute("INSERT OR IGNORE INTO marcas (clave, desde) VALUES (?,?)",
+                           (f"contada:{intento}", ahora)).rowcount
+        if nueva:
+            db.execute("UPDATE ventanas SET aplicadas = aplicadas + 1 WHERE fecha = ?", (fecha,))
+
+
+def marcar(db, clave, valor):
+    with db:
+        db.execute("INSERT OR REPLACE INTO marcas (clave, desde) VALUES (?,?)", (clave, valor))
+
+
+def marcas_con(db, prefijo):
+    return {f["clave"][len(prefijo):]: f["desde"] for f in
+            db.execute("SELECT clave, desde FROM marcas WHERE clave LIKE ?", (prefijo.replace("%", "") + "%",))}
+
+
 def escalar(db, candidata_id, servidor, incidente, clase, texto, ahora):
     """En una sola transacción: la candidata espera a una persona, el incidente se abre y el servidor queda bloqueado.
     Un corte no puede dejar una cosa sin la otra."""
     with db:
         db.execute("UPDATE candidatas SET estado = 'escalada', motivo = ?, actualizada = ? WHERE id = ?",
                    (clase, ahora, candidata_id))
-        f = db.execute("SELECT cerrado FROM incidentes WHERE id = ?", (incidente,)).fetchone()
+        f = _preservar_cierre(db, incidente, ahora)
         if f is None:
             db.execute("INSERT INTO incidentes (id, clase, texto, abierto) VALUES (?,?,?,?)", (incidente, clase, texto, ahora))
         elif f["cerrado"] is not None:

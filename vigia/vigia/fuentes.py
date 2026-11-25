@@ -122,7 +122,7 @@ def _destinos(registro, destinos):
 
 def _con_token(url, repo, pedir, cabeceras=None, destinos=None):
     """GET a un registro OCI; si pide credencial, saca un token anónimo de lectura para ese repositorio y repite."""
-    estado, cab, cuerpo = pedir(url, cabeceras)
+    estado, cab, cuerpo = pedir(url, cabeceras, destinos=destinos)
     if estado != 401:
         return estado, cab, cuerpo, None
     reto = dict(re.findall(r'(\w+)="([^"]*)"', cab.get("www-authenticate", "")))
@@ -133,7 +133,7 @@ def _con_token(url, repo, pedir, cabeceras=None, destinos=None):
     consulta = {"scope": f"repository:{repo}:pull"}
     if reto.get("service"):
         consulta["service"] = reto["service"]
-    e2, _, c2 = pedir(reto["realm"] + "?" + urllib.parse.urlencode(consulta))
+    e2, _, c2 = pedir(reto["realm"] + "?" + urllib.parse.urlencode(consulta), destinos=destinos)
     if e2 != 200:
         raise FuenteError("el registro no dio acceso anónimo")
     datos = _json(c2)
@@ -141,7 +141,7 @@ def _con_token(url, repo, pedir, cabeceras=None, destinos=None):
     if not isinstance(token, str) or not token:
         raise FuenteError("el registro no dio acceso anónimo")
     auth = {"Authorization": "Bearer " + token}
-    estado, cab, cuerpo = pedir(url, {**(cabeceras or {}), **auth})
+    estado, cab, cuerpo = pedir(url, {**(cabeceras or {}), **auth}, destinos=destinos)
     return estado, cab, cuerpo, auth
 
 
@@ -190,7 +190,8 @@ def detalle_oci(registro, repo, tag, pedir=pedir, destinos=None):
             if elegido is None or not _DIGEST.fullmatch(str(elegido.get("digest"))):
                 return None
             huellas.add(elegido["digest"])
-            estado, _, cuerpo = pedir(f"{base}/manifests/{elegido['digest']}", {"Accept": _MANIFIESTOS, **(auth or {})})
+            estado, _, cuerpo = pedir(f"{base}/manifests/{elegido['digest']}", {"Accept": _MANIFIESTOS, **(auth or {})},
+                                      destinos=permitidos)
             if estado != 200:
                 return None
             manifiesto = _json(cuerpo)

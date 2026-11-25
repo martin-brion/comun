@@ -413,7 +413,10 @@ def _recuperar_intento(cfg, db, it, servidor, tomar, reloj, correr):
     de, a = (_FIJA.fullmatch(d.get(k) or "") for k in ("de", "a"))
     pares = [tuple(x) for x in d["pares"]]
     como = [_como_corre(cfg, servidor, par, de and de.group(1), a and a.group(1), medir, tomar, reloj) for par in pares]
-    if como and all(x == "de" for x in como):
+    if como and all(x == "de" for x in como) and all(
+            accion(cfg, servidor["nombre"], "verificar", _valores(par), correr) is True for par in pares):
+        # Lo de antes corre y además verifica: quedó como estaba. Sin la verificación, podría ser una vuelta atrás
+        # fallida que el corte no dejó escalar.
         fallas = any(e["candidata"] == cid and e["n"] > it["paso_desde"] and e["resultado"] == "fallo"
                      for e in estado.diario(db))
         estado.pasar(db, cid, "esperando" if fallas else "detectada",
@@ -427,9 +430,9 @@ def _recuperar_intento(cfg, db, it, servidor, tomar, reloj, correr):
         for prefijo in ("estreno-" + str(d.get("tipo")), f"fallo-{cid}", f"plazo-{cid}", f"trabada-{cid}"):
             estado.cerrar_incidente(db, prefijo, ahora)
         if d.get("ventana") and estado.ventana(db, d["ventana"]):
-            estado.contar_aplicada(db, d["ventana"])
+            estado.contar_una_vez(db, d["ventana"], it["n"], ahora)
         if d.get("sin_madurar"):
-            estado.noticia(db, f"urgencia-{cid}-{ahora}", "aplicada por urgencia",
+            estado.noticia(db, f"urgencia-{cid}-{it['n']}", "aplicada por urgencia",
                            f"En {it['servidor']} se aplicó por urgencia {d.get('pieza', '')} → {d.get('propuesta', '')}, "
                            f"sin esperar la maduración, por {', '.join(d['sin_madurar'])}. Un corte la interrumpió y se "
                            "resolvió midiendo y verificando.", ahora)
@@ -671,11 +674,14 @@ def aplicar(cfg, presente=False, tomar=censo.tomar, pedir=fuentes.pedir, escanea
                 estado.pasar(db, c["id"], "cerrada", "aplicada por el vigía y verificada", ahora)
                 estado.estrenar(db, pieza["playbook"], c["id"], ahora)
                 estado.cerrar_incidente(db, f"estreno-{pieza['playbook']}", ahora)
-                estado.contar_aplicada(db, clave)
+                if intento:
+                    estado.contar_una_vez(db, clave, intento, ahora)
+                else:
+                    estado.contar_aplicada(db, clave)
                 for prefijo in ("fallo", "plazo", "trabada"):
                     estado.cerrar_incidente(db, f"{prefijo}-{c['id']}", ahora)
                 if urgencia:
-                    estado.noticia(db, f"urgencia-{c['id']}-{ahora}", "aplicada por urgencia",
+                    estado.noticia(db, f"urgencia-{c['id']}-{intento}", "aplicada por urgencia",
                                    f"En {servidor['nombre']} se aplicó {pieza['pieza']} {c['actual']} → {c['propuesta']} "
                                    f"sin esperar la maduración, por {', '.join(urgencia)} (falla con explotación "
                                    "conocida, en algo que da a internet). Verificada; el escáner comprobó que la versión "

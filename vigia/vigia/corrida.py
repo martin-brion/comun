@@ -244,7 +244,17 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes, leer_local=repos._c
             visto = estado.desde(db, f"visto:{registro}/{repo}@{d['indice']}", True, ahora)
             vista = analisis._iso(datetime.fromtimestamp(visto, timezone.utc))
             d["publicada"] = max(d["publicada"] or "", vista)
+            efectiva = analisis._fecha(d["publicada"])
+            if efectiva is not None:
+                estado.marcar(db, f"ocifecha:{registro}/{repo}:{tag}", int(efectiva.timestamp()))
         return d
+
+    def fechas(registro, repo):
+        """Las fechas de publicación que el vigía ya conoce de las etiquetas de un registro OCI."""
+        if registro == "docker.io":
+            return {}
+        return {t: analisis._iso(datetime.fromtimestamp(v, timezone.utc))
+                for t, v in estado.marcas_con(db, f"ocifecha:{registro}/{repo}:").items()}
 
     kev = fuentes.kev(pedir) if con_fuentes and cfg["fuentes"]["kev"] else {
         "estado": "desconocido", "motivo": "fuente apagada", "cves": set()}
@@ -267,7 +277,7 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes, leer_local=repos._c
             foto = t["foto"]
             sis = analisis.sistema(foto)
             _sistema(cfg, db, servidor["nombre"], sis, ahora)
-            piezas = analisis.piezas(cfg, servidor["nombre"], foto, consultar, detalle, ahora)
+            piezas = analisis.piezas(cfg, servidor["nombre"], foto, consultar, detalle, ahora, fechas)
             if piezas is not None:
                 ids = sorted({p["imagen_id"] for p in piezas if p["imagen_id"]})
                 if servidor["lector"] == "local":
@@ -287,6 +297,10 @@ def _correr(cfg, ahora, tomar, pedir, escanear, con_fuentes, leer_local=repos._c
                 ciegas = [p["pieza"] for p in piezas if p["estado"] == "desconocido" and not p.get("propia")
                           and not p.get("sistema") and p["pieza"] != "(sin referencia)"
                           and p["motivo"] not in ("registro sin fuente aprobada", "fuente apagada en la configuración")]
+                # Y las que tienen una versión nueva sin fecha (el detalle del registro falla): esperarían para siempre sin
+                # que nada avise. La que no tiene huella ya la avisa «trabada», si se aplica sola.
+                ciegas += [p["pieza"] for p in piezas if p.get("candidata")
+                           and p["candidata"]["compuerta_version"] == "espera: sin fecha de publicación"]
                 _durable(db, f"fuentes-{servidor['nombre']}", bool(ciegas) if con_fuentes else None, ahora, 3 * 86400,
                          "piezas sin poder saber", f"En {servidor['nombre']} hay piezas que hace más de tres días no se "
                          f"pueden comparar con lo publicado: {', '.join(sorted(set(ciegas))[:10])}.")
