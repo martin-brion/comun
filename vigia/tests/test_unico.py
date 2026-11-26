@@ -439,6 +439,25 @@ class Observar(Unico):
         datos.kev(self.red)
         return corrida.correr(self.cfg, ahora or self.ahora, tomar=self.s.tomar, pedir=self.red, **k)
 
+    def test_la_maquina_fuera_de_forma_abre_su_incidente_y_lo_cierra_al_corregirse(self):
+        ruta = os.path.join(self.tmp.name, "censo.json")
+        self.cfg = self.config(maquinas={"archivo": ruta, "esperadas": {"vm-a": {"servidor": "principal"},
+                                                                         "vm-b": {"sin_vigia": True}}})
+
+        def censo(lista, ahora):
+            with open(ruta, "w", encoding="utf-8") as f:
+                json.dump({"tomada": ahora, "maquinas": lista}, f)
+        censo([{"nombre": "vm-a", "estado": "corriendo"}, {"nombre": "vm b", "estado": "corriendo"}], AHORA)
+        r = self.correr(AHORA)
+        de_maquinas = sorted(i for i in self.incidentes() if i.startswith("maquina"))
+        self.assertEqual(len(de_maquinas), 2)
+        self.assertEqual(de_maquinas[0], "maquina-ausente-vm-b")
+        self.assertRegex(de_maquinas[1], r"^maquina-fuera-de-forma-vm_b-[0-9a-f]{8}$")
+        self.assertIn("1 en el censo, 1 fuera de forma", corrida.informe.resumen(r))
+        censo([{"nombre": "vm-a", "estado": "corriendo"}, {"nombre": "vm-b", "estado": "corriendo"}], AHORA + 3600)
+        self.correr(AHORA + 3600)
+        self.assertEqual([i for i in self.incidentes() if i.startswith("maquina")], [])
+
     def test_un_servidor_sin_medir_un_dia_se_avisa_y_se_cierra_al_volver(self):
         self.s.medible = False
         self.correr()
@@ -535,11 +554,35 @@ class Maquinas(unittest.TestCase):
     def test_un_censo_vencido_o_roto_es_desconocido(self):
         self.assertEqual(self.censo([], tomada=AHORA - 7200)["estado"], "desconocido")
         with open(self.ruta, "w", encoding="utf-8") as f:
-            f.write('{"tomada": 1, "maquinas": [{"nombre": "con espacio", "estado": "x"}]}')
+            f.write('{"tomada": %d, "maquinas": [{"nombre": 7, "estado": "corriendo"}]}' % AHORA)
         self.assertEqual(maquinas.leer(self.m, AHORA)["estado"], "desconocido")
         os.unlink(self.ruta)
         c = maquinas.leer(self.m, AHORA)
         self.assertEqual([i for i, _, _ in maquinas.hallazgos(self.m, c)], ["maquinas-censo"])
+
+    def test_una_maquina_con_nombre_fuera_de_forma_no_invalida_el_censo(self):
+        # Pedido del lado que recibe (261125): tres máquinas, una con espacio; las otras dos se comparan y la tercera
+        # abre su propio incidente, con el nombre saneado.
+        c = self.censo([{"nombre": "vm-a", "estado": "corriendo"}, {"nombre": "vm-b", "estado": "apagada"},
+                        {"nombre": "Web 01\nrm -rf", "estado": "corriendo"}])
+        self.assertEqual(c["estado"], "ok")
+        ids = [i for i, _, _ in maquinas.hallazgos(self.m, c)]
+        raro = [i for i in ids if i.startswith("maquina-fuera-de-forma-")]
+        self.assertEqual(len(raro), 1)
+        self.assertRegex(raro[0], r"^maquina-fuera-de-forma-Web_01_rm_-rf-[0-9a-f]{8}$")
+        self.assertIn("maquina-detenida-vm-b", ids)          # las otras se siguen comparando
+        self.assertIn("maquina-ausente-vm-c", ids)
+        texto = next(t for i, _, t in maquinas.hallazgos(self.m, c) if i == raro[0])
+        self.assertNotIn("\n", texto)
+
+    def test_un_estado_fuera_de_forma_no_se_toma_por_ausente_ni_detenida(self):
+        c = self.censo([{"nombre": "vm-a", "estado": "corriendo"}, {"nombre": "vm-b", "estado": "En Marcha"},
+                        {"nombre": "vm-c", "estado": "apagada"}])
+        self.assertEqual([i for i, _, _ in maquinas.hallazgos(self.m, c)], ["maquina-fuera-de-forma-vm-b"])
+        # La misma máquina válida en una entrada y rara en otra tampoco se compara.
+        c = self.censo([{"nombre": "vm-a", "estado": "corriendo"}, {"nombre": "vm-b", "estado": "corriendo"},
+                        {"nombre": "vm-b", "estado": ""}, {"nombre": "vm-c", "estado": "apagada"}])
+        self.assertEqual([i for i, _, _ in maquinas.hallazgos(self.m, c)], ["maquina-fuera-de-forma-vm-b"])
 
     def test_la_configuracion_no_nombra_un_servidor_desconocido(self):
         with self.assertRaises(config.ConfigError):
