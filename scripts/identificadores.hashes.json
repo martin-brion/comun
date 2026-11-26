@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "normalization": "NFKC.casefold",
-  "source_sha256": "0f73604316e3cb4298725a4d48177b1d7084673a85c4a624e60d7011bfed97d2",
+  "source_sha256": "185d6d0e9f9f4b2d21216820201cebbe09aae8b77ad2446b838e8ac564e01d08",
   "rules": [
     {
       "kind": "code-template",
@@ -377,6 +377,11 @@
       "kind": "word",
       "length": 5,
       "sha256": "5a25b1ead8d42041272e1d6805a78e8aa94bcaecb16c8936cf26f1eb64eaf69e"
+    },
+    {
+      "kind": "word",
+      "length": 5,
+      "sha256": "9dc0d9b17031c4f6b63411e90e9628d471eeca4f562ffaff6eb0ee2412fd00be"
     },
     {
       "kind": "word",
