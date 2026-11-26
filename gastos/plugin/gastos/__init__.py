@@ -1325,11 +1325,24 @@ def _validar_seguimiento(p):
 
 async def _con_presentacion(ctx, c, lote_id, resultado):
     """La carga con su presentación (gastos.presentacion/1), si la empresa la declara: nunca la cambia ni la frena."""
-    p = await presentacion.armar(ctx, c, _leer(lote_id), resultado, sys.modules[__name__])
     salida = {**resultado, "empresa": c["empresa"], "destino": c["destino"]}
-    if p is not None:
-        salida["presentacion"] = p
+    if not c.get("presentacion"):
+        return salida
+    try:
+        plan = _leer(lote_id)
+    except (GastoError, estado.EstadoError):
+        log.warning("gastos: no se pudo releer la propuesta del lote %s para su presentación", lote_id)
+        return {**salida, "presentacion": {"estado": "fallida", "motivo": "no se pudo releer la propuesta"}}
+    salida["presentacion"] = await _presentacion_ofrecida(ctx, c, plan, resultado)
     return salida
+
+
+async def _presentacion_ofrecida(ctx, c, plan, resultado):
+    """La presentación, y si ya se le había ofrecido a la persona (para que el agente pregunte antes de prepararla otra vez)."""
+    g = sys.modules[__name__]
+    p = await presentacion.armar(ctx, c, plan, resultado, g)
+    ya = presentacion.marcar_ofrecida(plan["lote_id"], c, g) if p["estado"] == "lista" else None
+    return {**p, **({"ofrecida": ya} if ya else {})}
 
 
 async def _con_seguimiento(ctx, c, plan, resultado):
@@ -1360,22 +1373,26 @@ async def _tool_presentacion(ctx, args):
         with _contexto(ctx, args) as c:
             await _puerta(ctx)
             lote_id = args.get('lote_id', '')
-            plan = _leer(lote_id)
-            if plan.get('login') != ctx.user.login:
-                raise GastoError('El lote no pertenece a tu identidad.')
-            _validar_seleccion(plan, c)
+            estado.raiz(lote_id)
             if not c.get('presentacion'):
                 return _ok('Esta empresa no tiene configurado el mail de presentación del lote: no hay a quién mandarlo '
                            'desde el bot.')
-            recibo = estado.recibo(lote_id, c)
-            if not recibo or recibo.get('estado') != 'cargado':
-                raise GastoError('El lote no tiene una carga completa: la presentación sale al terminar la carga.')
-            p = await presentacion.armar(ctx, c, plan, recibo['resultado'], sys.modules[__name__])
+            # Con el candado del lote: una anulación en el medio no deja un mail de facturas borradas.
+            locks = _LOCKS.setdefault(asyncio.get_running_loop(), {})
+            async with locks.setdefault(lote_id, asyncio.Lock()), custodia.exclusion(lote_id, c):
+                plan = _leer(lote_id)
+                if plan.get('login') != ctx.user.login:
+                    raise GastoError('El lote no pertenece a tu identidad.')
+                _validar_seleccion(plan, c)
+                recibo = estado.recibo(lote_id, c)
+                if not recibo or recibo.get('estado') != 'cargado':
+                    raise GastoError('El lote no tiene una carga completa: la presentación sale al terminar la carga.')
+                p = await _presentacion_ofrecida(ctx, c, plan, recibo['resultado'])
             if p['estado'] == 'no_corresponde':
                 return _ok('Para este lote no corresponde mail de presentación.')
             if p['estado'] == 'fallida':
                 return _publico(_ok(presentacion.pie(p)), presentacion.pie(p))
-            return _ok(presentacion.pie(p) + presentacion.para_el_agente(p))
+            return _ok(presentacion.pie(p) + presentacion.para_el_agente(p, p.get('ofrecida')))
     except (GastoError, estado.EstadoError, configuracion.ConfigError) as exc:
         return _err(str(exc))
 
@@ -1539,6 +1556,10 @@ async def _observados(ctx, c, plan):
                 log.warning("gastos: no se pudo consultar emisores observados (%s)", type(exc).__name__)
                 consultas[cuit] = (False, f"No pude consultar si el CUIT/RUT {cuit} figura entre los emisores observados.")
         observado, texto = consultas[cuit]
+        if _TEXTO_TECNICO.search(texto):
+            log.warning("gastos: la consulta de emisores observados devolvió un texto técnico")
+            texto = (f"El CUIT/RUT {cuit} figura entre los emisores observados." if observado else
+                     f"No pude leer si el CUIT/RUT {cuit} figura entre los emisores observados.")
         if observado:
             f.setdefault("revision_carga", []).append(texto)
         elif fiscal.motivos(f):
@@ -1782,7 +1803,7 @@ async def _tool_cargar(ctx, args):
         texto = cuerpo or json.dumps({k: v for k, v in resultado.items() if k != 'presentacion'}, ensure_ascii=False)
         if pie:
             texto += '\n'+pie
-        texto += presentacion.para_el_agente(resultado.get('presentacion'))
+        texto += presentacion.para_el_agente(resultado.get('presentacion'), (resultado.get('presentacion') or {}).get('ofrecida'))
         return _publico(_ok(texto), cuerpo, pie)
     except (GastoError, OSError) as exc:
         return _rechazo(exc)

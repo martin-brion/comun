@@ -162,6 +162,8 @@ def _validar(raiz):
         if "impuestos" in c or "documentos" in c:
             c["impuestos"], c["documentos"] = _fiscal(nombre, c.get("impuestos"), c.get("documentos"), destinos)
         _ante_error(nombre, c, destinos)
+        if c.get("presentacion") and "rendicion" not in c:
+            raise ConfigError(f"Empresa {nombre}: presentacion es del circuito de facturas (declarar rendicion=true o false)")
         categorias = c.get("categorias", {})
         if not isinstance(categorias, dict):
             raise ConfigError(f"Empresa {nombre}: categorias debe ser un catálogo")

@@ -609,18 +609,26 @@ nota dice el mismo CUIT/RUT del emisor, o si no se puede saber. `gasto_anular` s
 cargar no se prepara desde el bot, y el seguimiento recibe solo los comprobantes con factura.
 
 0.1.0-dev.20. `presentacion: <proveedor>`, por empresa y opcional, nombra el proveedor de `gastos.presentacion/1`:
-`async presentar(ctx, marco, datos) -> None | {"para": [mail], "cc": [mail], "asunto": str, "cuerpo": str}`. Al terminar una
-carga (`cargado` o `parcial`, también al repetir el OK) el plugin arma `datos` solo desde el resultado y la propuesta: empresa,
-destino, compañía, lote, estado, persona ({login, nombre}), facturas ({foto, comercio, moneda, importe, link, marcada,
-motivos}), no_cargadas ({foto, comercio, moneda, importe, motivo}), totales por moneda y `texto`, el cuerpo del plugin. None
-es «no corresponde». `para` lleva de 1 a 20 direcciones; `cc` (sin repetir `para`), `asunto` (hasta 200, una línea) y
-`cuerpo` (hasta 4000, el tope de `mail_preparar`) son opcionales: sin ellos van el asunto y el `texto` del plugin. El plugin
-no conoce direcciones ni jerarquías. Sin la clave, el resultado es el de la 0.1.0-dev.19. La clave no entra en la firma.
+`async presentar(ctx, marco, datos) -> None | {"para": [mail], "cc": [mail], "asunto": str, "encabezado": str}`. Va solo con
+el circuito de facturas (`rendicion` declarada) y no entra en la firma. Al terminar una carga (`cargado` o `parcial`, también
+al repetir el OK) el plugin arma `datos` solo desde el resultado y la propuesta: empresa, destino, compañía, lote, estado,
+persona ({login, nombre}), facturas ({foto, comercio, moneda, importe, link, marcada, motivos, avisos}), no_cargadas y
+sin_verificar ({foto, comercio, moneda, importe, motivo}), totales por moneda y `texto`, el detalle del plugin. Cada dato va
+en una línea y un motivo con texto técnico se reemplaza por uno genérico. `avisos` dice una factura sin IVA desglosado también
+sin `ante_error: borrador`; `sin_verificar` son las de `por_conciliar`, que pueden haber quedado a medias en Odoo.
+
+None es «no corresponde». `para` lleva de 1 a 20 direcciones; `cc` (sin repetir `para`), `asunto` (hasta 200, una línea) y
+`encabezado` (hasta 600) son opcionales. El cuerpo es siempre el `texto` del plugin, con el encabezado adelante: la casa no
+puede dejar afuera una factura, un motivo ni los totales. Si el detalle no entra en 4000 caracteres (el tope de
+`mail_preparar`), las facturas sin nada que revisar se resumen en una línea; lo marcado, lo que no entró y los totales van
+siempre. El plugin no conoce direcciones ni jerarquías. Sin la clave, el resultado es el de la 0.1.0-dev.19.
 
 La presentación (`{"estado": "lista", para, cc, asunto, cuerpo}`, `no_corresponde` o `fallida` con su motivo) va en el
-resultado de la carga y queda en `<erp>.presentacion.json`, junto al recibo, con la huella de sus datos: la misma carga da la
-misma presentación y no se le vuelve a pedir a la casa (una fallida sí se vuelve a pedir). Una falla del proveedor o una
-respuesta inválida no toca la carga: la persona ve «No pude armar el mail que presenta el lote». El plugin no manda nada. El
-texto para la persona ofrece prepararlo; el modelo recibe el mail exacto para la tool de correo del motor, `mail_preparar`,
-cuya tarjeta muestra el texto completo y lo despacha solo con el OK de la persona, una vez. `gasto_presentacion {lote_id,
-empresa, destino}` (solo lectura) lo devuelve después, sobre una carga completa. `gasto_anular` la borra con el recibo.
+resultado y queda en `<erp>.presentacion.json`, junto al recibo, con la huella de sus datos: la misma carga da la misma
+presentación y no se le vuelve a pedir a la casa (una fallida sí). Al proveedor se lo espera hasta 30 s; una falla, una espera
+vencida o una respuesta inválida no tocan la carga: la persona ve «No pude armar el mail que presenta el lote». El plugin no
+manda nada. El texto para la persona ofrece prepararlo; el modelo recibe el mail exacto para la tool de correo del motor,
+`mail_preparar`, cuya tarjeta muestra el texto completo y lo despacha solo con el OK de la persona. El plugin no ve los envíos
+del motor: anota la primera vez que ofreció el mail y, si se lo vuelven a pedir, el modelo pregunta si ya salió antes de
+prepararlo otra vez, porque otro OK lo manda de nuevo. `gasto_presentacion {lote_id, empresa, destino}` (solo lectura, con
+el candado del lote) lo devuelve después, sobre una carga completa. `gasto_anular` la borra con el recibo.
