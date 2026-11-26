@@ -55,7 +55,7 @@ def _validar(raiz):
     plana = "empresas" not in raiz
     campos = {"company_id", "zona_horaria", "diario", "etiqueta", "compania", "comprobante",
               "workflow", "imputador", "politica", "seguimiento", "padron_proveedores", "alta_proveedor", "textos", "destinos", "categorias", "rendicion", "cuentas",
-              "impuestos", "documentos", *ANTE_ERROR, *SIN_FIRMA}
+              "impuestos", "documentos", *ANTE_ERROR, "presentacion", *SIN_FIRMA}
     if raiz.keys() - (campos | {"retencion_dias", "lote"} if plana else {"empresas", "retencion_dias", "textos", "lote"}):
         raise ConfigError("La configuración de gastos contiene claves desconocidas")
     dias = raiz.get("retencion_dias", 90)
@@ -88,7 +88,7 @@ def _validar(raiz):
                 and isinstance(alta["script"], str) and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./-]*\.py", alta["script"])
                 and ".." not in alta["script"].split("/")):
             raise ConfigError(f"Empresa {nombre}: alta_proveedor declara repo y script, y requiere padron_proveedores")
-        for campo in ("imputador", "politica", "seguimiento", "emisores_observados"):
+        for campo in ("imputador", "politica", "seguimiento", "emisores_observados", "presentacion"):
             if c.get(campo) and not clave(c[campo]):
                 raise ConfigError(f"Empresa {nombre}: nombre de {campo} inválido")
         textos = {**raiz.get("textos", {}), **c.get("textos", {})} if isinstance(raiz.get("textos", {}), dict) and isinstance(c.get("textos", {}), dict) else None
@@ -498,7 +498,8 @@ def seleccionar(raiz, user, args):
     if efectivo.get("ante_error") == "frenar":
         del efectivo["ante_error"]      # declararlo es lo mismo que omitirlo: la firma no cambia
     # La política y la activación de RRHH no forman parte de la aprobación fiscal.
-    fuera = (*SIN_FIRMA, "politica", "rendicion") if "rendicion" in c else SIN_FIRMA
+    # La presentación (0.1.0-dev.20) es un mail después de la carga: no cambia lo que se escribe en Odoo.
+    fuera = (*SIN_FIRMA, "politica", "rendicion", "presentacion") if "rendicion" in c else (*SIN_FIRMA, "presentacion")
     para_firmar = {k: v for k, v in efectivo.items() if k not in fuera}
     if "rendicion" in c:
         para_firmar = {**para_firmar, "circuito": "facturas/1"}

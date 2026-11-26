@@ -27,7 +27,7 @@ from weakref import WeakKeyDictionary
 import time
 import uuid
 import sys
-from . import configuracion, estado, facturas, custodia, estandar, fiscal
+from . import configuracion, estado, facturas, custodia, estandar, fiscal, presentacion
 from dataclasses import dataclass
 from typing import Callable, Awaitable
 
@@ -1206,7 +1206,7 @@ async def _operacion(ctx, args, cargar_corrido=False, aprobacion=None):
                         # Repetir el OK de una carga completa devuelve lo registrado: Administración puede haber
                         # confirmado una factura desde entonces, y volver a verificarla como borrador la daría por perdida.
                         resultado = await _con_seguimiento(ctx, c, _leer(lote_id), recibo["resultado"])
-                        return {**resultado, "empresa": c["empresa"], "destino": c["destino"]}
+                        return await _con_presentacion(ctx, c, lote_id, resultado)
                     resultado = await _cargar(ctx, args)
                     if resultado.get("estado") == "parcial":
                         # Se cortó (ante_error=borrador): lo cargado queda y la corrida sigue abierta para retomarla.
@@ -1214,6 +1214,7 @@ async def _operacion(ctx, args, cargar_corrido=False, aprobacion=None):
                     else:
                         estado.completar(lote_id, c, resultado)
                         resultado = await _con_seguimiento(ctx, c, _leer(lote_id), resultado)
+                    return await _con_presentacion(ctx, c, lote_id, resultado)
                 else:
                     recibo = estado.recibo(lote_id, c)
                     if recibo and recibo.get("estado") == "cargado":
@@ -1322,6 +1323,15 @@ def _validar_seguimiento(p):
         raise ValueError('Proveedor de seguimiento incompatible')
 
 
+async def _con_presentacion(ctx, c, lote_id, resultado):
+    """La carga con su presentación (gastos.presentacion/1), si la empresa la declara: nunca la cambia ni la frena."""
+    p = await presentacion.armar(ctx, c, _leer(lote_id), resultado, sys.modules[__name__])
+    salida = {**resultado, "empresa": c["empresa"], "destino": c["destino"]}
+    if p is not None:
+        salida["presentacion"] = p
+    return salida
+
+
 async def _con_seguimiento(ctx, c, plan, resultado):
     salida = {**resultado, 'texto': texto_carga(resultado, plan, c)}
     nombre = c.get('seguimiento')
@@ -1341,6 +1351,33 @@ async def _con_seguimiento(ctx, c, plan, resultado):
                 'La factura ya está cargada. Falló el seguimiento posterior; revisalo con gasto_estado. '
                 'No repitas la creación de la factura ni declares terminado el seguimiento.'}
     return salida
+
+
+async def _tool_presentacion(ctx, args):
+    """La presentación de un lote ya cargado, para cuando la persona la pide después («¿y el mail?»). Solo lee."""
+    from bot.broker import _err, _ok
+    try:
+        with _contexto(ctx, args) as c:
+            await _puerta(ctx)
+            lote_id = args.get('lote_id', '')
+            plan = _leer(lote_id)
+            if plan.get('login') != ctx.user.login:
+                raise GastoError('El lote no pertenece a tu identidad.')
+            _validar_seleccion(plan, c)
+            if not c.get('presentacion'):
+                return _ok('Esta empresa no tiene configurado el mail de presentación del lote: no hay a quién mandarlo '
+                           'desde el bot.')
+            recibo = estado.recibo(lote_id, c)
+            if not recibo or recibo.get('estado') != 'cargado':
+                raise GastoError('El lote no tiene una carga completa: la presentación sale al terminar la carga.')
+            p = await presentacion.armar(ctx, c, plan, recibo['resultado'], sys.modules[__name__])
+            if p['estado'] == 'no_corresponde':
+                return _ok('Para este lote no corresponde mail de presentación.')
+            if p['estado'] == 'fallida':
+                return _publico(_ok(presentacion.pie(p)), presentacion.pie(p))
+            return _ok(presentacion.pie(p) + presentacion.para_el_agente(p))
+    except (GastoError, estado.EstadoError, configuracion.ConfigError) as exc:
+        return _err(str(exc))
 
 
 async def _tool_estado(ctx, args):
@@ -1740,9 +1777,12 @@ async def _tool_cargar(ctx, args):
         pie = ''
         if resultado.get('seguimiento'):
             pie = resultado['seguimiento'].get('texto','Falta revisar el registro posterior de estas facturas.')
-        texto = cuerpo or json.dumps(resultado, ensure_ascii=False)
+        if aviso := presentacion.pie(resultado.get('presentacion')):
+            pie = f"{pie}\n{aviso}".strip()
+        texto = cuerpo or json.dumps({k: v for k, v in resultado.items() if k != 'presentacion'}, ensure_ascii=False)
         if pie:
             texto += '\n'+pie
+        texto += presentacion.para_el_agente(resultado.get('presentacion'))
         return _publico(_ok(texto), cuerpo, pie)
     except (GastoError, OSError) as exc:
         return _rechazo(exc)
@@ -1928,6 +1968,10 @@ PLUGIN = plugins.Plugin(
         plugins.Tool('gasto_estado', 'Recuperar los enlaces y el seguimiento de un lote ya cargado, sin crear '
             'facturas. Usala también después de un timeout. Atendé el seguimiento pendiente antes de terminar.',
             {'empresa':str,'destino':str,'lote_id':str},_tool_estado,oculta_input=True),
+        plugins.Tool('gasto_presentacion', 'El mail que presenta un lote ya cargado (a quién va lo decide la casa), para '
+            'cuando la persona lo pide después de la carga. No manda nada: si la persona quiere, pasá el mail tal cual a '
+            'mail_preparar, que le muestra el texto completo y lo despacha con su OK.',
+            {'empresa': str, 'destino': str, 'lote_id': str}, _tool_presentacion, oculta_input=True),
         plugins.Tool("gasto_catalogo", "Con empresa (la empresa_sugerida del material del lote, si la hay) devuelve "
                      "exclusivamente sus categorías configuradas y válidas; sin destino usa el destino por defecto de la empresa "
                      "(otro, solo si la persona lo pide). Sin empresa, lista las empresas y destinos nominales disponibles. "
@@ -1992,7 +2036,8 @@ PLUGIN = plugins.Plugin(
     ), activar=_activar, puntos_extension=(plugins.PuntoExtension("gastos.imputador", 1, _validar_proveedor),
         plugins.PuntoExtension("gastos.politica", 1, _validar_politica),
         plugins.PuntoExtension("gastos.seguimiento", 1, _validar_seguimiento),
-        plugins.PuntoExtension("gastos.emisores", 1, _validar_observados)))
+        plugins.PuntoExtension("gastos.emisores", 1, _validar_observados),
+        plugins.PuntoExtension("gastos.presentacion", 1, presentacion.validar_proveedor)))
 
 
 # La sala personal del trámite de gastos: su nota de sistema le dice al modelo qué tools usar y qué workflow seguir.

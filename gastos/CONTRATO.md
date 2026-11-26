@@ -607,3 +607,20 @@ marcada, con su motivo) y una por comprobante sin cargar. El aviso a la sala de 
 facturas de emisores distintos: para `ya_cargado`, una factura suya con el mismo tipo y número es el mismo comprobante si su
 nota dice el mismo CUIT/RUT del emisor, o si no se puede saber. `gasto_anular` sigue igual: la actividad se va con la factura. Una rendición de un lote con un comprobante sin
 cargar no se prepara desde el bot, y el seguimiento recibe solo los comprobantes con factura.
+
+0.1.0-dev.20. `presentacion: <proveedor>`, por empresa y opcional, nombra el proveedor de `gastos.presentacion/1`:
+`async presentar(ctx, marco, datos) -> None | {"para": [mail], "cc": [mail], "asunto": str, "cuerpo": str}`. Al terminar una
+carga (`cargado` o `parcial`, también al repetir el OK) el plugin arma `datos` solo desde el resultado y la propuesta: empresa,
+destino, compañía, lote, estado, persona ({login, nombre}), facturas ({foto, comercio, moneda, importe, link, marcada,
+motivos}), no_cargadas ({foto, comercio, moneda, importe, motivo}), totales por moneda y `texto`, el cuerpo del plugin. None
+es «no corresponde». `para` lleva de 1 a 20 direcciones; `cc` (sin repetir `para`), `asunto` (hasta 200, una línea) y
+`cuerpo` (hasta 4000, el tope de `mail_preparar`) son opcionales: sin ellos van el asunto y el `texto` del plugin. El plugin
+no conoce direcciones ni jerarquías. Sin la clave, el resultado es el de la 0.1.0-dev.19. La clave no entra en la firma.
+
+La presentación (`{"estado": "lista", para, cc, asunto, cuerpo}`, `no_corresponde` o `fallida` con su motivo) va en el
+resultado de la carga y queda en `<erp>.presentacion.json`, junto al recibo, con la huella de sus datos: la misma carga da la
+misma presentación y no se le vuelve a pedir a la casa (una fallida sí se vuelve a pedir). Una falla del proveedor o una
+respuesta inválida no toca la carga: la persona ve «No pude armar el mail que presenta el lote». El plugin no manda nada. El
+texto para la persona ofrece prepararlo; el modelo recibe el mail exacto para la tool de correo del motor, `mail_preparar`,
+cuya tarjeta muestra el texto completo y lo despacha solo con el OK de la persona, una vez. `gasto_presentacion {lote_id,
+empresa, destino}` (solo lectura) lo devuelve después, sobre una carga completa. `gasto_anular` la borra con el recibo.

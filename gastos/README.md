@@ -125,6 +125,12 @@ anulación como su inversa: si la instancia la lista en `directo.json`, la carga
 La rendición, un alta de proveedor y un destino con seguimiento siguen con tarjeta. Detalle en
 `CONTRATO.md`. Carga también en motores previos.
 
+0.1.0-dev.20: el mail que presenta el lote, opcional por empresa. `"presentacion": "<proveedor>"` nombra el
+proveedor de `gastos.presentacion/1`, de la casa, que dice a quién va. El plugin arma el contenido desde el resultado de la
+carga (facturas con link, marcadas con su motivo, no cargadas, totales por moneda) y no manda nada: el agente lo pasa tal cual
+a `mail_preparar`, que muestra el texto completo y despacha con el OK de la persona. Sin la clave, todo como la dev.19.
+Detalle en `CONTRATO.md`.
+
 0.1.0-dev.19: `ante_error`, por empresa. Sin la clave, o con `frenar`, todo como antes.
 Con `borrador`, un comprobante con un error de datos entra igual en borrador, marcado
 para Administración, y el error de uno no frena a los demás. Pide dos claves más, con
