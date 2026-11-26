@@ -55,7 +55,7 @@ def _validar(raiz):
     plana = "empresas" not in raiz
     campos = {"company_id", "zona_horaria", "diario", "etiqueta", "compania", "comprobante",
               "workflow", "imputador", "politica", "seguimiento", "padron_proveedores", "alta_proveedor", "textos", "destinos", "categorias", "rendicion", "cuentas",
-              "impuestos", "documentos", *SIN_FIRMA}
+              "impuestos", "documentos", *ANTE_ERROR, *SIN_FIRMA}
     if raiz.keys() - (campos | {"retencion_dias", "lote"} if plana else {"empresas", "retencion_dias", "textos", "lote"}):
         raise ConfigError("La configuración de gastos contiene claves desconocidas")
     dias = raiz.get("retencion_dias", 90)
@@ -88,7 +88,7 @@ def _validar(raiz):
                 and isinstance(alta["script"], str) and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./-]*\.py", alta["script"])
                 and ".." not in alta["script"].split("/")):
             raise ConfigError(f"Empresa {nombre}: alta_proveedor declara repo y script, y requiere padron_proveedores")
-        for campo in ("imputador", "politica", "seguimiento"):
+        for campo in ("imputador", "politica", "seguimiento", "emisores_observados"):
             if c.get(campo) and not clave(c[campo]):
                 raise ConfigError(f"Empresa {nombre}: nombre de {campo} inválido")
         textos = {**raiz.get("textos", {}), **c.get("textos", {})} if isinstance(raiz.get("textos", {}), dict) and isinstance(c.get("textos", {}), dict) else None
@@ -161,6 +161,7 @@ def _validar(raiz):
                               "(declarar rendicion=true o false)")
         if "impuestos" in c or "documentos" in c:
             c["impuestos"], c["documentos"] = _fiscal(nombre, c.get("impuestos"), c.get("documentos"), destinos)
+        _ante_error(nombre, c, destinos)
         categorias = c.get("categorias", {})
         if not isinstance(categorias, dict):
             raise ConfigError(f"Empresa {nombre}: categorias debe ser un catálogo")
@@ -227,6 +228,40 @@ def _identificacion(nombre, c, destinos):
                                        or c["destino_por_defecto"] not in destinos):
         raise ConfigError(f"Empresa {nombre}: destino_por_defecto tiene que ser uno de sus destinos "
                           f"({', '.join(destinos)})")
+
+
+# Qué hace la carga ante un error de datos de un comprobante (0.1.0-dev.19). Sin «ante_error», o con «frenar», como antes.
+# Con «borrador», el comprobante entra igual en borrador, marcado para Administración: con el proveedor a regularizar si el
+# alta no quedó, y una actividad para el responsable de revisión. Los ids van por destino, como el diario.
+ANTE_ERROR = ("ante_error", "proveedor_a_regularizar", "responsable_revision", "emisores_observados")
+
+
+def _ante_error(nombre, c, destinos):
+    politica = c.get("ante_error", "frenar")
+    if politica not in ("frenar", "borrador"):
+        raise ConfigError(f"Empresa {nombre}: ante_error es «frenar» o «borrador»")
+    if politica == "frenar":
+        if any(k in c for k in ANTE_ERROR[1:]):
+            raise ConfigError(f"Empresa {nombre}: proveedor_a_regularizar, responsable_revision y emisores_observados van "
+                              "solo con ante_error=borrador")
+        return
+    if "rendicion" not in c:
+        raise ConfigError(f"Empresa {nombre}: ante_error=borrador es del circuito de facturas (declarar rendicion=true o "
+                          "false)")
+    for campo, que in (("proveedor_a_regularizar", "el contacto de Odoo que lleva la factura mientras falta el proveedor"),
+                       ("responsable_revision", "el usuario de Odoo que recibe la actividad de revisión")):
+        ids = ids_por_destino(c.get(campo), destinos)
+        if ids is None:
+            ejemplo = ", ".join(f'"{alias}": <ID>' for alias in destinos)
+            raise ConfigError(f'Empresa {nombre}: ante_error=borrador pide {campo} ({que}), con su ID en cada destino '
+                              f'("{campo}": {{"ids": {{{ejemplo}}}}})')
+        c[campo] = {"ids": ids}
+
+
+def ante_error_borrador(c):
+    """La corrida `c` (seleccionar) carga en borrador lo que trae un error de datos: la empresa lo declara y el destino es el
+    del ingreso estándar, el que lleva proveedor y documento fiscal. En otro destino, como antes."""
+    return c.get("ante_error") == "borrador" and "rendicion" in c and (c.get("capacidades") or {}).get("factura") == "estandar"
 
 
 def cierre_inactividad(raiz):
@@ -457,6 +492,11 @@ def seleccionar(raiz, user, args):
     efectivo.update(empresa=empresa, destino=destino, categorias=referencias, erp=list(identidad), endpoint=d)
     if "rendicion" in c:
         efectivo["cuentas"] = {n: v["ids"][destino] for n, v in c["cuentas"].items()}
+    for campo in ("proveedor_a_regularizar", "responsable_revision"):
+        if campo in c:
+            efectivo[campo] = c[campo]["ids"][destino]
+    if efectivo.get("ante_error") == "frenar":
+        del efectivo["ante_error"]      # declararlo es lo mismo que omitirlo: la firma no cambia
     # La política y la activación de RRHH no forman parte de la aprobación fiscal.
     fuera = (*SIN_FIRMA, "politica", "rendicion") if "rendicion" in c else SIN_FIRMA
     para_firmar = {k: v for k, v in efectivo.items() if k not in fuera}

@@ -146,6 +146,10 @@ async def base_rendicion(ctx,args,g):
     if not r or r.get("estado") != "cargado" or "facturas" not in r.get("resultado",{}):
         raise g.GastoError("Primero registrar las facturas; su recibo es independiente de la rendición")
     for x in plan["comprobantes"]:
+        if str(x["n"]) not in r["resultado"]["facturas"]:
+            # ante_error=borrador: un comprobante que no se cargó deja el lote sin rendición desde el bot.
+            raise g.GastoError(f"La foto {x['n']} del lote no se cargó como factura: la rendición de este lote se hace en "
+                               "Odoo.")
         ident = r["resultado"]["facturas"][str(x["n"])]
         if caps["factura"] == "estandar":
             if "_estandar_campos" not in c:

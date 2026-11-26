@@ -79,13 +79,17 @@ async def contrato(ctx, g):
     resultado = {}
     # La única modificación es el importe impreso en una línea de impuesto (percepción, o IVA que difiere por redondeo): write
     # solo hace falta si la empresa tiene impuestos configurados.
-    escribe = ("write",) if c.get("impuestos") else ()
-    for modelo, requeridos in _CAMPOS.items():
+    # Con ante_error=borrador, la actividad de revisión: Odoo pide crear la actividad y escribir en la factura.
+    borrador = configuracion.ante_error_borrador(c)
+    escribe = ("write",) if c.get("impuestos") or borrador else ()
+    for modelo, requeridos in {**_CAMPOS, **({"mail.activity": {}} if borrador else {})}.items():
         operaciones = {"account.move": ("read", "create", *escribe), "account.move.line": ("read",)}.get(
             modelo, ("read", "create"))
         for operacion in operaciones:
             if await g._odoo(ctx, modelo, "check_access_rights", operacion, raise_exception=False) is not True:
                 raise g.GastoError(f"La identidad nominal no tiene permiso {operacion} sobre {modelo}")
+        if not requeridos:
+            continue
         campos = await g._odoo(ctx, modelo, "fields_get", attributes=["type"])
         if faltas := diferencias(modelo, campos, requeridos):
             raise error_contrato(g, faltas)
@@ -356,86 +360,198 @@ async def _adjunto(ctx, lote, x, respaldo, factura, entrada, ruta, datos, c, g):
     return ident
 
 
+RESUMEN_REVISION = "Revisar comprobante cargado por el bot"
+
+
+async def _modelo_factura(ctx, c, g):
+    if "_modelo_factura" not in c:
+        filas = await g._odoo(ctx, "ir.model", "search_read", [("model", "=", "account.move")], fields=["model"], limit=1)
+        if len(filas) != 1 or not configuracion.positivo(filas[0].get("id")):
+            raise g.GastoError("No encontré en Odoo el modelo de las facturas para dejar la actividad de revisión")
+        c["_modelo_factura"] = filas[0]["id"]
+    return c["_modelo_factura"]
+
+
+async def _actividad(ctx, ident, x, motivos, observado, entrada, ruta, datos, c, g):
+    """La actividad de revisión de una factura marcada (ante_error=borrador), para el responsable que declara la empresa,
+    con el motivo. Una sola por factura: la intención queda en la evidencia local antes de crearla, y antes de crear se busca
+    la del mismo resumen y el mismo responsable. La factura no se confirma ni se envía; Odoo avisa al responsable de su
+    actividad como a cualquier otra, y lo suma como seguidor de la factura."""
+    if type(entrada.get("actividad")) is int:
+        return entrada["actividad"]
+    filas = await g._odoo(ctx, "mail.activity", "search_read", [
+        ("res_model", "=", "account.move"), ("res_id", "=", ident), ("summary", "=", RESUMEN_REVISION),
+        ("user_id", "=", c["responsable_revision"])], fields=["summary"], limit=1)
+    if filas:
+        aid = filas[0]["id"]
+    else:
+        modelo = await _modelo_factura(ctx, c, g)
+        g._vigencia(ctx, c)
+        nota = "".join(fiscal.narracion(t) for t in (
+            "Para revisar: el bot lo cargó en borrador con problemas. " + " ".join(motivos), observado,
+            f"Comprobante {x['marker']}, foto {x['n']}.") if t)
+        entrada["actividad"] = "pendiente"
+        _guardar(ruta, datos)
+        aid = await g._odoo(ctx, "mail.activity", "create", {
+            "res_model_id": modelo, "res_id": ident, "user_id": c["responsable_revision"],
+            "summary": RESUMEN_REVISION, "note": nota}, context={"allowed_company_ids": [c["company_id"]]})
+        if not configuracion.positivo(aid):
+            raise g.GastoError("El ERP no devolvió el ID de la actividad de revisión")
+    entrada["actividad"] = aid
+    _guardar(ruta, datos)
+    return aid
+
+
+def _publico(g, exc):
+    """El motivo de un comprobante que no se cargó, para la persona; el detalle técnico va al registro."""
+    if isinstance(exc, g.GastoTecnico) or g._TEXTO_TECNICO.search(str(exc)):
+        g.log.warning("gastos: comprobante sin cargar: %s", str(exc)[:300])
+        return getattr(exc, "publico", "") or "un error técnico al escribir en Odoo (el detalle quedó en el registro)"
+    return " ".join(str(exc).split())[:300]
+
+
 async def cargar(ctx, lote, c, plan, g):
     if "_estandar_campos" not in c:
         await contrato(ctx, g)
-    ruta, datos = _intenciones(plan, c, g)
+    if not configuracion.ante_error_borrador(c):
+        return await _cargar(ctx, lote, c, plan, g)
+    # ante_error=borrador: cada comprobante va por su cuenta. Un error de ese comprobante antes de escribir lo deja afuera
+    # (no_cargados) y la carga sigue. Si ya había empezado a escribirlo, lo que quedó en Odoo hay que conciliarlo
+    # (por_conciliar): la carga sigue, pero la corrida queda parcial. Lo que impide escribir (Odoo, la identidad, la
+    # configuración o el estado local) corta: lo cargado queda, la corrida queda parcial y un reintento retoma.
+    facturas, no_cargados, por_conciliar, revision, sin_actividad = {}, {}, {}, {}, {}
+    frenado = ""
+    for x in plan["comprobantes"]:
+        n = str(x["n"])
+        if frenado:
+            no_cargados[n] = frenado
+            continue
+        try:
+            ident, entrada, ruta, datos = await _uno(ctx, lote, c, plan, x, g)
+        except (g.GastoFrena, g.GastoTecnico, estado.EstadoError) as exc:
+            frenado = f"se cortó la carga: {_publico(g, exc)}"
+            no_cargados[n] = frenado
+            continue
+        except g.GastoError as exc:
+            _, datos = _intenciones(plan, c, g)
+            (por_conciliar if datos["fotos"].get(f"{plan['company_id']}/{x['n']}") else no_cargados)[n] = _publico(g, exc)
+            continue
+        facturas[n] = ident
+        # La marca es la que llevó la factura al crearse; si se creó en otro intento, la de ese intento.
+        motivos = entrada.get("motivos", fiscal.motivos(x.get("fiscal")))
+        if motivos:
+            revision[n] = {"factura": ident, "motivos": motivos}
+            try:
+                revision[n]["actividad"] = await _actividad(ctx, ident, x, motivos, entrada.get(
+                    "observado", (x.get("fiscal") or {}).get("observado", "")), entrada, ruta, datos, c, g)
+            except g.GastoFrena as exc:
+                frenado = f"se cortó la carga: {_publico(g, exc)}"
+                sin_actividad[n] = frenado
+            except (g.GastoError, estado.EstadoError) as exc:
+                sin_actividad[n] = _publico(g, exc)
+    resultado = _resultado(c, plan, facturas)
+    resultado.update(estado="parcial" if frenado or por_conciliar else "borrador",
+                     pendiente_administracion={n: [*revision[n]["motivos"], *t] if n in revision else t
+                                               for n, t in resultado["pendiente_administracion"].items()
+                                               if n in facturas})
+    for clave, valor in (("revision", revision), ("no_cargados", no_cargados), ("por_conciliar", por_conciliar),
+                         ("sin_actividad", sin_actividad)):
+        if valor:
+            resultado[clave] = valor
+    return resultado
+
+
+async def _cargar(ctx, lote, c, plan, g):
     facturas = {}
     for x in plan["comprobantes"]:
-        g._vigencia(ctx, c)
-        clave, entrada = _foto_entrada(datos, plan, x, g)
-        if entrada and entrada.get("id"):
-            ident = entrada["id"]
-        else:
-            filas = await g._odoo(ctx, "account.move", "search_read", [
-                ("company_id", "=", c["company_id"]), ("move_type", "=", "in_invoice"),
-                ("invoice_origin", "=", x["marker"])], fields=campos_factura(c), limit=2)
-            if len(filas) > 1:
-                raise g.GastoError("Hay facturas ambiguas para el comprobante; requiere conciliación")
-            if filas:
-                ident = filas[0]["id"]
-                entrada = {"payload": _payload(plan, x), "estado": "conocido", "id": ident,
-                           "adjuntos": entrada.get("adjuntos", {}) if entrada else {}}
-                datos["fotos"][clave] = entrada
-                _guardar(ruta, datos)
-            elif entrada:
-                raise g.GastoError("El resultado de la factura es incierto; requiere conciliación antes de crear otra")
-            else:
-                f = x.get("fiscal")
-                if f and admite_fiscal(c):
-                    # Odoo recién frena un número repetido al confirmar: se busca antes, con los borradores.
-                    previo = await fiscal.ya_cargado(ctx, c, f, g)
-                    if previo:
-                        raise g.GastoError(fiscal.aviso_duplicado(x, f, previo))
-                entrada = {"payload": _payload(plan, x), "estado": "pendiente", "adjuntos": {}}
-                datos["fotos"][clave] = entrada
-                _guardar(ruta, datos)
-                # Todas las líneas llevan la imputación del comprobante, también la de percepción: la casa puede exigir
-                # la analítica en cada línea de gasto para confirmar.
-                values = {
-                    "move_type": "in_invoice", "state": "draft", "company_id": c["company_id"],
-                    "journal_id": plan["journal_id"], "currency_id": x["currency_id"], "invoice_date": x["fecha"],
-                    "partner_id": (f.get("partner_id") or False) if _con_impuestos(x) else False,
-                    "ref": referencia(x) or False, "auto_post": "no", "invoice_origin": x["marker"],
-                    "invoice_line_ids": [(0, 0, {"name": nombre,
-                        "account_id": x["account_id"], "quantity": 1, "price_unit": float(Decimal(monto)),
-                        # El producto de la categoría, como carga Administración. Va en la misma escritura que el
-                        # precio, los impuestos, la cuenta y la analítica: así Odoo no los recalcula desde el producto.
-                        "product_id": x["product_id"], "discount": 0, "tax_ids": [(6, 0, impuestos)],
-                        "analytic_distribution": x["imputacion"]["distribucion"]})
-                        for nombre, monto, impuestos in fiscal.lineas_factura(x)],
-                }
-                if _con_impuestos(x):
-                    values.update(l10n_latam_document_type_id=f["documento_id"],
-                                  l10n_latam_document_number=f["numero_odoo"])
-                else:
-                    values.update({nombre: False for nombre in _LATAM if nombre in campos_factura(c)})
-                if _admite_narracion(c) and (nota := fiscal.nota_factura(x)):
-                    values["narration"] = nota
-                if tipo_valido(_metadata(c).get(_FECHA[0]), _FECHA[1]):
-                    values[_FECHA[0]] = x["fecha"]
-                try:
-                    g._vigencia(ctx, c)
-                    ident = await g._odoo(ctx, "account.move", "create", values,
-                                         context={"allowed_company_ids": [c["company_id"]]})
-                    if not configuracion.positivo(ident):
-                        raise g.GastoError("El ERP no devolvió el ID de la factura")
-                    entrada.update(id=ident, estado="conocido")
-                    _guardar(ruta, datos)
-                except BaseException:
-                    entrada["estado"] = "resultado_incierto"
-                    _guardar(ruta, datos)
-                    raise
-        await _percepciones(ctx, ident, plan, x, entrada, ruta, datos, c, g)
-        await _leer_factura(ctx, ident, plan, x, c, g)
-        estado.efecto(plan["lote_id"], c, "account.move", ident)
-        for respaldo in g._respaldos(x):
-            aid = await _adjunto(ctx, lote, x, respaldo, ident, entrada, ruta, datos, c, g)
-            estado.efecto(plan["lote_id"], c, "ir.attachment", aid)
-        await _leer_factura(ctx, ident, plan, x, c, g)
-        entrada["estado"] = "verificado"
-        _guardar(ruta, datos)
+        ident, *_ = await _uno(ctx, lote, c, plan, x, g)
         facturas[str(x["n"])] = ident
+    return _resultado(c, plan, facturas)
+
+
+async def _uno(ctx, lote, c, plan, x, g):
+    """La factura de un comprobante, con sus fotos, verificada: (id, entrada, ruta, datos) de su evidencia local."""
+    ruta, datos = _intenciones(plan, c, g)
+    g._vigencia(ctx, c)
+    clave, entrada = _foto_entrada(datos, plan, x, g)
+    if entrada and entrada.get("id"):
+        ident = entrada["id"]
+    else:
+        filas = await g._odoo(ctx, "account.move", "search_read", [
+            ("company_id", "=", c["company_id"]), ("move_type", "=", "in_invoice"),
+            ("invoice_origin", "=", x["marker"])], fields=campos_factura(c), limit=2)
+        if len(filas) > 1:
+            raise g.GastoError("Hay facturas ambiguas para el comprobante; requiere conciliación")
+        if filas:
+            ident = filas[0]["id"]
+            entrada = {"payload": _payload(plan, x), "estado": "conocido", "id": ident,
+                       "adjuntos": entrada.get("adjuntos", {}) if entrada else {}}
+            datos["fotos"][clave] = entrada
+            _guardar(ruta, datos)
+        elif entrada:
+            raise g.GastoError("El resultado de la factura es incierto; requiere conciliación antes de crear otra")
+        else:
+            f = x.get("fiscal")
+            if f and admite_fiscal(c):
+                # Odoo recién frena un número repetido al confirmar: se busca antes, con los borradores.
+                previo = await fiscal.ya_cargado(ctx, c, f, g)
+                if previo:
+                    raise g.GastoError(fiscal.aviso_duplicado(x, f, previo))
+            entrada = {"payload": _payload(plan, x), "estado": "pendiente", "adjuntos": {}}
+            if configuracion.ante_error_borrador(c):
+                # La marca con que se crea la factura: un reintento la reusa aunque lo que se sabe al cargar cambie.
+                entrada.update(motivos=fiscal.motivos(f), observado=(f or {}).get("observado", ""))
+            datos["fotos"][clave] = entrada
+            _guardar(ruta, datos)
+            # Todas las líneas llevan la imputación del comprobante, también la de percepción: la casa puede exigir
+            # la analítica en cada línea de gasto para confirmar.
+            values = {
+                "move_type": "in_invoice", "state": "draft", "company_id": c["company_id"],
+                "journal_id": plan["journal_id"], "currency_id": x["currency_id"], "invoice_date": x["fecha"],
+                "partner_id": (f.get("partner_id") or False) if _con_impuestos(x) else False,
+                "ref": referencia(x) or False, "auto_post": "no", "invoice_origin": x["marker"],
+                "invoice_line_ids": [(0, 0, {"name": nombre,
+                    "account_id": x["account_id"], "quantity": 1, "price_unit": float(Decimal(monto)),
+                    # El producto de la categoría, como carga Administración. Va en la misma escritura que el
+                    # precio, los impuestos, la cuenta y la analítica: así Odoo no los recalcula desde el producto.
+                    "product_id": x["product_id"], "discount": 0, "tax_ids": [(6, 0, impuestos)],
+                    "analytic_distribution": x["imputacion"]["distribucion"]})
+                    for nombre, monto, impuestos in fiscal.lineas_factura(x)],
+            }
+            if _con_impuestos(x):
+                values.update(l10n_latam_document_type_id=f["documento_id"],
+                              l10n_latam_document_number=f["numero_odoo"])
+            else:
+                values.update({nombre: False for nombre in _LATAM if nombre in campos_factura(c)})
+            if _admite_narracion(c) and (nota := fiscal.nota_factura(x)):
+                values["narration"] = nota
+            if tipo_valido(_metadata(c).get(_FECHA[0]), _FECHA[1]):
+                values[_FECHA[0]] = x["fecha"]
+            try:
+                g._vigencia(ctx, c)
+                ident = await g._odoo(ctx, "account.move", "create", values,
+                                     context={"allowed_company_ids": [c["company_id"]]})
+                if not configuracion.positivo(ident):
+                    raise g.GastoError("El ERP no devolvió el ID de la factura")
+                entrada.update(id=ident, estado="conocido")
+                _guardar(ruta, datos)
+            except BaseException:
+                entrada["estado"] = "resultado_incierto"
+                _guardar(ruta, datos)
+                raise
+    await _percepciones(ctx, ident, plan, x, entrada, ruta, datos, c, g)
+    await _leer_factura(ctx, ident, plan, x, c, g)
+    estado.efecto(plan["lote_id"], c, "account.move", ident)
+    for respaldo in g._respaldos(x):
+        aid = await _adjunto(ctx, lote, x, respaldo, ident, entrada, ruta, datos, c, g)
+        estado.efecto(plan["lote_id"], c, "ir.attachment", aid)
+    await _leer_factura(ctx, ident, plan, x, c, g)
+    entrada["estado"] = "verificado"
+    _guardar(ruta, datos)
+    return ident, entrada, ruta, datos
+
+
+def _resultado(c, plan, facturas):
     return {"estado": "borrador", "facturas": facturas,
             "rendicion": "disponible como acción separada" if c["rendicion"] else "deshabilitada",
             "aviso": ("Facturas estándar en borrador con analítica y fotos registradas. Las que van con impuestos llevan "

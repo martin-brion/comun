@@ -41,6 +41,13 @@ class DisponibleTests(unittest.TestCase):
                           {**GLOBAL, 'secreto_api_key': 'ENSAYO_KEY'}):
                 self.assertIsNone(p.disponible({'alta_proveedor': ALTA, 'endpoint': ajeno}), ajeno)
 
+    def test_la_url_tambien_tiene_que_ser_la_del_erp_global(self):
+        with patch.object(p.config, 'ODOO_DB', 'casa'), patch.object(p.config, 'ODOO_URL', 'https://erp.example.test'):
+            mismo = {**GLOBAL, 'url': 'https://ERP.example.test/'}
+            self.assertEqual(p.disponible({'alta_proveedor': ALTA, 'endpoint': mismo}), ALTA)
+            otro = {**GLOBAL, 'url': 'https://otro.example.test'}
+            self.assertIsNone(p.disponible({'alta_proveedor': ALTA, 'endpoint': otro}))
+
 
 class SalidaTests(unittest.TestCase):
     def test_lee_la_ultima_linea_json(self):

@@ -37,6 +37,9 @@ class SeguimientoTests(base.FiscalTests):
         secretos=patch.object(proveedores,'SECRETOS',('PRINCIPAL_LOGIN','PRINCIPAL_KEY'))
         secretos.start()
         self.addCleanup(secretos.stop)
+        url=patch.object(proveedores.config,'ODOO_URL',base.PRINCIPAL+'/')     # el ERP global del bot es el principal
+        url.start()
+        self.addCleanup(url.stop)
 
     def toolbelt(self,rc=0,salida=None,crea=True,**extra):
         """La puerta del motor con un toolbelt falso: con --apply crea la razón social, como el de verdad."""
