@@ -664,7 +664,7 @@ async def proveedor(ctx, c, f, g, *, mantener=0):
         ("company_id", "=", c["company_id"]), ("company_id", "=", False)], fields=["name", "vat"],
         limit=_MAX_REPETIDOS, order="id")
     filas = sorted((r for r in filas if digitos(r.get("vat")) == cuit), key=lambda r: r["id"])
-    if c.get('padron_proveedores'):
+    if c.get('padron_proveedores') or configuracion.ante_error_borrador(c):
         from .proveedores import PENDIENTE
         filas = [r for r in filas if not (r.get('name') or '').startswith(PENDIENTE)]
     if not filas:
@@ -716,11 +716,14 @@ async def ya_cargado(ctx, c, f, g, *, propio=0):
         return None
     canon = numero_canonico(f["numero"])
     cola = next((p for p in reversed(canon.split("-")) if p.isdigit()), canon)
+    generico = c.get("proveedor_a_regularizar")
+    con_nota = generico and "narration" in (c.get("_estandar_campos") or {}).get("account.move", {})
     filas = await g._odoo(ctx, "account.move", "search_read", [
         ("company_id", "=", c["company_id"]), ("move_type", "=", "in_invoice"),
         ("l10n_latam_document_type_id", "=", documento["id"]), ("state", "!=", "cancel"),
         ("l10n_latam_document_number", "ilike", cola)],
-        fields=["name", "state", "partner_id", "l10n_latam_document_number"], limit=50)
+        fields=["name", "state", "partner_id", "l10n_latam_document_number", *(["narration"] if con_nota else [])],
+        limit=50)
     filas = [r for r in filas if r.get("id") != propio and numero_canonico(r.get("l10n_latam_document_number")) == canon]
     if not filas:
         return None
@@ -728,11 +731,16 @@ async def ya_cargado(ctx, c, f, g, *, propio=0):
     cuits = {}
     if socios and f.get("cuit"):
         cuits = {r["id"]: digitos(r.get("vat")) for r in await g._odoo(ctx, "res.partner", "read", socios, fields=["vat"])}
-    # El proveedor a regularizar lleva facturas de emisores distintos: el mismo número con él no es el mismo comprobante.
-    generico = c.get("proveedor_a_regularizar")
     for r in filas:
         socio = g._rel(r.get("partner_id"))
-        if (not socio or (socio == f.get("partner_id") and socio != generico)
+        if socio and socio == generico:
+            # El proveedor a regularizar lleva facturas de emisores distintos: es el mismo comprobante si su nota dice el
+            # mismo emisor, o si no se puede saber (sin CUIT/RUT leído o sin nota).
+            emisor = re.search(r"CUIT/RUT del emisor ([0-9][0-9 .-]*)", str(r.get("narration") or "")) if con_nota else None
+            if not f.get("cuit") or not emisor or digitos(emisor.group(1)) == f["cuit"]:
+                return {"id": r["id"], "name": r.get("name") or "", "state": r.get("state") or ""}
+            continue
+        if (not socio or socio == f.get("partner_id")
                 or (f.get("cuit") and cuits.get(socio) == f["cuit"])):
             return {"id": r["id"], "name": r.get("name") or "", "state": r.get("state") or ""}
     return None

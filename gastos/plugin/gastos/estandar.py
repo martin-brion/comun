@@ -372,23 +372,26 @@ async def _modelo_factura(ctx, c, g):
     return c["_modelo_factura"]
 
 
-async def _actividad(ctx, ident, x, entrada, ruta, datos, c, g):
+async def _actividad(ctx, ident, x, motivos, observado, entrada, ruta, datos, c, g):
     """La actividad de revisión de una factura marcada (ante_error=borrador), para el responsable que declara la empresa,
-    con el motivo. Una sola por factura: se busca antes de crearla y su id queda en la evidencia local. Ni la factura ni la
-    actividad se confirman ni se envían a un tercero."""
-    f = x.get("fiscal")
-    if entrada.get("actividad"):
+    con el motivo. Una sola por factura: la intención queda en la evidencia local antes de crearla, y antes de crear se busca
+    la del mismo resumen y el mismo responsable. La factura no se confirma ni se envía; Odoo avisa al responsable de su
+    actividad como a cualquier otra, y lo suma como seguidor de la factura."""
+    if type(entrada.get("actividad")) is int:
         return entrada["actividad"]
     filas = await g._odoo(ctx, "mail.activity", "search_read", [
-        ("res_model", "=", "account.move"), ("res_id", "=", ident), ("summary", "=", RESUMEN_REVISION)],
-        fields=["summary"], limit=1)
+        ("res_model", "=", "account.move"), ("res_id", "=", ident), ("summary", "=", RESUMEN_REVISION),
+        ("user_id", "=", c["responsable_revision"])], fields=["summary"], limit=1)
     if filas:
         aid = filas[0]["id"]
     else:
         modelo = await _modelo_factura(ctx, c, g)
         g._vigencia(ctx, c)
-        nota = "".join(fiscal.narracion(t) for t in (fiscal.aviso_revision(f), f.get("observado"),
-                                                       f"Comprobante {x['marker']}, foto {x['n']}.") if t)
+        nota = "".join(fiscal.narracion(t) for t in (
+            "Para revisar: el bot lo cargó en borrador con problemas. " + " ".join(motivos), observado,
+            f"Comprobante {x['marker']}, foto {x['n']}.") if t)
+        entrada["actividad"] = "pendiente"
+        _guardar(ruta, datos)
         aid = await g._odoo(ctx, "mail.activity", "create", {
             "res_model_id": modelo, "res_id": ident, "user_id": c["responsable_revision"],
             "summary": RESUMEN_REVISION, "note": nota}, context={"allowed_company_ids": [c["company_id"]]})
@@ -412,10 +415,11 @@ async def cargar(ctx, lote, c, plan, g):
         await contrato(ctx, g)
     if not configuracion.ante_error_borrador(c):
         return await _cargar(ctx, lote, c, plan, g)
-    # ante_error=borrador: cada comprobante va por su cuenta. Un error de ese comprobante lo deja afuera, con su motivo, y
-    # la carga sigue; lo que impide escribir (Odoo, la identidad, la configuración o el estado local) corta: los ya
-    # cargados quedan, la corrida queda parcial y un reintento retoma sin duplicar.
-    facturas, no_cargados, revision, sin_actividad = {}, {}, {}, {}
+    # ante_error=borrador: cada comprobante va por su cuenta. Un error de ese comprobante antes de escribir lo deja afuera
+    # (no_cargados) y la carga sigue. Si ya había empezado a escribirlo, lo que quedó en Odoo hay que conciliarlo
+    # (por_conciliar): la carga sigue, pero la corrida queda parcial. Lo que impide escribir (Odoo, la identidad, la
+    # configuración o el estado local) corta: lo cargado queda, la corrida queda parcial y un reintento retoma.
+    facturas, no_cargados, por_conciliar, revision, sin_actividad = {}, {}, {}, {}, {}
     frenado = ""
     for x in plan["comprobantes"]:
         n = str(x["n"])
@@ -429,22 +433,29 @@ async def cargar(ctx, lote, c, plan, g):
             no_cargados[n] = frenado
             continue
         except g.GastoError as exc:
-            no_cargados[n] = _publico(g, exc)
+            _, datos = _intenciones(plan, c, g)
+            (por_conciliar if datos["fotos"].get(f"{plan['company_id']}/{x['n']}") else no_cargados)[n] = _publico(g, exc)
             continue
         facturas[n] = ident
-        motivos = fiscal.motivos(x.get("fiscal"))
+        # La marca es la que llevó la factura al crearse; si se creó en otro intento, la de ese intento.
+        motivos = entrada.get("motivos", fiscal.motivos(x.get("fiscal")))
         if motivos:
             revision[n] = {"factura": ident, "motivos": motivos}
             try:
-                revision[n]["actividad"] = await _actividad(ctx, ident, x, entrada, ruta, datos, c, g)
+                revision[n]["actividad"] = await _actividad(ctx, ident, x, motivos, entrada.get(
+                    "observado", (x.get("fiscal") or {}).get("observado", "")), entrada, ruta, datos, c, g)
+            except g.GastoFrena as exc:
+                frenado = f"se cortó la carga: {_publico(g, exc)}"
+                sin_actividad[n] = frenado
             except (g.GastoError, estado.EstadoError) as exc:
                 sin_actividad[n] = _publico(g, exc)
     resultado = _resultado(c, plan, facturas)
-    resultado.update(estado="parcial" if frenado else "borrador",
+    resultado.update(estado="parcial" if frenado or por_conciliar else "borrador",
                      pendiente_administracion={n: [*revision[n]["motivos"], *t] if n in revision else t
                                                for n, t in resultado["pendiente_administracion"].items()
                                                if n in facturas})
-    for clave, valor in (("revision", revision), ("no_cargados", no_cargados), ("sin_actividad", sin_actividad)):
+    for clave, valor in (("revision", revision), ("no_cargados", no_cargados), ("por_conciliar", por_conciliar),
+                         ("sin_actividad", sin_actividad)):
         if valor:
             resultado[clave] = valor
     return resultado
@@ -487,6 +498,9 @@ async def _uno(ctx, lote, c, plan, x, g):
                 if previo:
                     raise g.GastoError(fiscal.aviso_duplicado(x, f, previo))
             entrada = {"payload": _payload(plan, x), "estado": "pendiente", "adjuntos": {}}
+            if configuracion.ante_error_borrador(c):
+                # La marca con que se crea la factura: un reintento la reusa aunque lo que se sabe al cargar cambie.
+                entrada.update(motivos=fiscal.motivos(f), observado=(f or {}).get("observado", ""))
             datos["fotos"][clave] = entrada
             _guardar(ruta, datos)
             # Todas las líneas llevan la imputación del comprobante, también la de percepción: la casa puede exigir

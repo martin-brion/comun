@@ -559,12 +559,15 @@ un reintegro. En un motor anterior el plugin carga igual, sin la declaración, y
 
 0.1.0-dev.19. `ante_error: frenar|borrador`, por empresa; sin la clave, `frenar`, que es todo lo anterior. `borrador` pide
 `rendicion` declarada y dos claves con un ID por destino: `proveedor_a_regularizar` (res.partner) y `responsable_revision`
-(res.users); `emisores_observados` es opcional. Las tres van solo con `borrador` (ConfigError) y entran en la firma. Rige en
+(res.users); `emisores_observados` es opcional. Las tres van solo con `borrador` (ConfigError) y entran en la firma;
+`ante_error: frenar` declarado no la cambia: es lo mismo que omitirlo. Rige en
 un destino con factura `estandar` (`configuracion.ante_error_borrador`); en otro, la corrida es la de `frenar`.
 
 Al preparar, un error de datos del comprobante no frena: la línea del plan lleva `fiscal.revision` (motivos en castellano
 llano) y entra en la huella. Sin CUIT/RUT leído, sin alta en ese destino, un ensayo que falla o un número que ya está en Odoo
-y no sirve como proveedor: el proveedor a regularizar (`a_regularizar`). Con una provisoria (prefijo PENDIENTE) del CUIT/RUT:
+y no sirve como proveedor, o, sin `padron_proveedores`, un CUIT/RUT que no está en Odoo: el proveedor a regularizar
+(`a_regularizar`). Con `padron_proveedores: AR`, un número que no queda como punto de venta y número va sin impuestos y
+marcado: Odoo lo rechazaría al crear. La búsqueda del proveedor deja afuera la provisoria también sin padrón. Con una provisoria (prefijo PENDIENTE) del CUIT/RUT:
 el alta, si el destino la ofrece, que la retoma con el OK; si no, la provisoria (`pendiente`). Una factura sin impuestos
 queda marcada con su motivo, salvo que el destino no lleve documentos fiscales. Siguen frenando el receptor ajeno, el
 comprobante ya cargado, la imputación y la configuración. Al OK se revalida que el proveedor a regularizar y la provisoria
@@ -572,25 +575,35 @@ sigan siendo los de la propuesta.
 
 Con el OK, `proveedores.resolver_borrador` reemplaza a `resolver`: corre el alta con `--conservar-pendiente` una sola vez por
 lote y CUIT/RUT. Lo resuelto queda en `<erp>.altas.json`, antes de correr (`en_curso`) y después (`validado`, `pendiente`
-o `generico`, con el id y el motivo); un reintento lo reusa y un `en_curso` no se repite. Alta válida: el proveedor; con un
-aviso del padrón, además marcada. Rechazo con `pendiente_id`: la provisoria, si su CUIT/RUT coincide. Timeout, relectura
+o `generico`, con el id y el motivo); un reintento lo reusa si el contacto sigue activo, de la compañía y con ese CUIT/RUT
+(la provisoria, con su prefijo), y si no, busca por número sin repetir el alta; un `en_curso` no se repite. Antes de cada
+alta se revalida la corrida. `disponible` compara además la URL del destino con la del ERP global. Alta válida: el proveedor; con un
+aviso del padrón, además marcada, también si el alta retomó un contacto que ya estaba. Rechazo con `pendiente_id`: la provisoria, si su CUIT/RUT coincide. Timeout, relectura
 distinta (rc 3), el toolbelt que no corre u otra salida: se busca por número la razón social válida o la provisoria, y si no
-hay, el proveedor a regularizar; nunca un segundo contacto. El motivo va a `fiscal.revision_carga`, en memoria: como el
+hay, el proveedor a regularizar; nunca un segundo contacto. Un texto del toolbelt que parece técnico (rutas, excepciones) no
+llega al motivo: va al registro. El motivo va a `fiscal.revision_carga`, en memoria: como el
 proveedor que resolvió el alta, no forma parte de lo firmado (`fiscal.sin_alta`). Con `emisores_observados`, el proveedor
 de `gastos.emisores/1` (`async consultar(ctx, marco, id_fiscal) -> {"observado": bool, "texto": str}`) marca el comprobante
 de un emisor observado, y la nota de cada marcado dice qué dio la consulta. Su falla no frena.
 
-`estandar.cargar` carga cada comprobante por su cuenta. Un error de ese comprobante lo deja en `no_cargados` con su motivo y
-la carga sigue; la corrida se completa. `GastoFrena` (cambió la configuración o la propuesta, una escritura no permitida),
-`GastoTecnico` (Odoo) y `EstadoError` cortan: lo cargado queda, el resto va a `no_cargados`, el resultado es `parcial`, el
+`estandar.cargar` carga cada comprobante por su cuenta. Un error de ese comprobante antes de escribirlo lo deja en
+`no_cargados` con su motivo y la carga sigue. Si ya tenía intención en la evidencia local (puede haber algo en Odoo), va a
+`por_conciliar`: la carga sigue, pero la corrida queda `parcial` y Administración lo concilia antes de repetirla. Sin
+ninguno de los dos, la corrida se completa. Repetir el OK de una corrida completa devuelve el resultado registrado, sin volver
+a verificar facturas que Administración pudo confirmar. `GastoFrena` (cambió la configuración o la propuesta, una escritura no permitida),
+`GastoTecnico` (Odoo) y `EstadoError` cortan (una configuración que ya no selecciona la corrida es `GastoFrena`): lo cargado queda, el resto va a `no_cargados`, el resultado es `parcial`, el
 recibo no se completa y un reintento retoma por identificadores. La factura marcada lleva el motivo al principio de la nota
 interna (`narration`) y una actividad (`mail.activity`, «Revisar comprobante cargado por el bot») para el responsable, con el
-motivo; una por factura, buscada antes de crear y con su id en la evidencia local. Es la única escritura nueva: `create` de
+motivo; una por factura y responsable: la intención queda en la evidencia local antes de crearla y se busca antes. La marca
+con que se crea la factura queda en su intención y un reintento la reusa. Odoo avisa al responsable de su actividad, como a
+cualquier otra, y lo suma como seguidor de la factura. Es la única escritura nueva: `create` de
 `mail.activity`, solo con `borrador`; el preflight pide `create` sobre `mail.activity` y `write` sobre `account.move`. Si la
 actividad falla, la factura queda con su nota y el resultado lo dice (`sin_actividad`). Nada se confirma ni se envía.
 
 El resultado suma `revision` ({foto: {factura, motivos, actividad}}), `no_cargados` y `sin_actividad`. El texto para la persona
 es «Cargué N en borrador; M quedaron marcados para que los revise Administración:», una línea por factura con su link (la
 marcada, con su motivo) y una por comprobante sin cargar. El aviso a la sala de Administración, cuando exista, toma
-`revision`. `gasto_anular` sigue igual: la actividad se va con la factura. Una rendición de un lote con un comprobante sin
+`revision`; si las líneas no entran, van primero las marcadas y las que no se cargaron. El proveedor a regularizar lleva
+facturas de emisores distintos: para `ya_cargado`, una factura suya con el mismo tipo y número es el mismo comprobante si su
+nota dice el mismo CUIT/RUT del emisor, o si no se puede saber. `gasto_anular` sigue igual: la actividad se va con la factura. Una rendición de un lote con un comprobante sin
 cargar no se prepara desde el bot, y el seguimiento recibe solo los comprobantes con factura.

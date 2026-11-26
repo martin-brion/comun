@@ -426,3 +426,122 @@ class BorradorTests(base.FiscalTests):
         self.assertEqual(g.estandar._payload(plan, x), firma)
         x["fiscal"]["revision"] = ["otro"]
         self.assertNotEqual(g.estandar._payload(plan, x), firma)
+
+    # ------------------------------------------------------------------------------------------- de la revisión independiente
+    async def test_una_factura_incierta_deja_la_corrida_abierta(self):
+        self.borrador()
+        await self.cargar_lote()
+        cayo = []
+
+        def caer(modelo, metodo, args):
+            if modelo == "account.move" and metodo == "create" and args[0].get("invoice_origin") == "[L000123/F02]" \
+                    and not cayo:
+                cayo.append(1)
+                return True
+            return False
+        self.caer = caer
+        with self.toolbelt():
+            await self.aprobar(destino="principal")
+        self.caer = None
+        with self.toolbelt():
+            r = await self.aprobar(destino="principal")
+        texto = r["content"][0]["text"]
+        self.assertIn("no la pude verificar", texto)
+        self.assertIn("antes de repetir la carga", texto)
+        self.assertEqual(self.recibo()["estado"], "parcial")
+        self.assertEqual(len(self.facturas()), 1)
+
+    async def test_repetir_el_ok_de_una_carga_completa_devuelve_lo_registrado(self):
+        self.borrador()
+        await self.cargar_lote()
+        with self.toolbelt():
+            await self.aprobar(destino="principal")
+        self.factura_de(1)["state"] = "posted"          # Administración la confirmó
+        with self.toolbelt():
+            r = await self.aprobar(destino="principal")
+        self.assertNotIn("is_error", r, r)
+        self.assertEqual(set(self.recibo()["resultado"]["facturas"]), {"1", "2"})
+        self.assertNotIn("no la cargué", r["content"][0]["text"])
+
+    async def test_un_contacto_que_cambio_entre_intentos_no_se_usa(self):
+        self.borrador()
+        await self.cargar_lote()
+        self.caer = lambda modelo, metodo, args: modelo == "account.move" and metodo == "search_read"
+        with self.toolbelt(rc=1, crea=False, pendiente=True, error="no validó"):
+            r = await self.aprobar(destino="principal")
+        self.assertEqual(self.recibo()["estado"], "parcial")
+        self.erps["principal"]["res.partner"][PROVISORIA]["vat"] = "30777777770"      # Administración le corrigió el número
+        self.caer = None
+        aplicadas = sum(1 for *_, aplicar in self.corridas if aplicar)
+        with self.toolbelt(rc=1, crea=False, pendiente=True, error="no validó"):
+            r = await self.aprobar(destino="principal")
+        self.assertNotIn("is_error", r, r)
+        self.assertEqual(sum(1 for *_, aplicar in self.corridas if aplicar), aplicadas)
+        self.assertEqual(self.factura_de(1)["partner_id"][0], GENERICO)
+        self.assertIn("cambió en Odoo", self.factura_de(1)["narration"])
+
+    async def test_el_mismo_comprobante_con_el_proveedor_a_regularizar_no_se_duplica(self):
+        self.borrador()
+        await self.cargar_lote()
+        with self.toolbelt(rc=1, crea=False, error="no validó"):
+            await self.aprobar(destino="principal")
+        self.assertEqual(self.factura_de(1)["partner_id"][0], GENERICO)
+        otro = self.crear_lote("L000124")
+        self.guardar(base.lectura(), base.lectura(cuit=OTRO, numero="0012-00034999"), lote_id="L000124",
+                     items=otro["items"])
+        with self.toolbelt(), self.assertRaisesRegex(g.GastoError, "ya está en Odoo"):
+            await self.preparar(destino="principal", lote_id="L000124")
+        # Otro emisor con el mismo número no es el mismo comprobante.
+        self.guardar(base.lectura(cuit="30666666660"), base.lectura(cuit=OTRO, numero="0012-00034999"),
+                     lote_id="L000124", items=otro["items"])
+        with self.toolbelt():
+            await self.preparar(destino="principal", lote_id="L000124")
+
+    async def test_un_numero_argentino_mal_leido_va_sin_impuestos_y_marcado(self):
+        self.borrador()
+        self.guardar(base.lectura(numero="ABC123"), base.lectura(cuit=OTRO, numero="0012-00034568"))
+        p = await self.cargar_lote()
+        factura = p["propuesta"]["comprobantes"][0]["factura"]
+        self.assertEqual(factura["impuestos"], "no")
+        self.assertIn("punto de venta", factura["revision"][0])
+
+    async def test_sin_padron_un_proveedor_que_no_esta_va_con_el_generico(self):
+        self.borrador(alta=False)
+        del self.raiz["empresas"]["taller"]["padron_proveedores"]
+        self.escribir()
+        p = await self.preparar(destino="principal")
+        factura = p["propuesta"]["comprobantes"][0]["factura"]
+        self.assertIn("no está en Odoo", factura["revision"][0])
+        self.assertIn("proveedor a regularizar", factura["proveedor"])
+
+    async def test_un_aviso_al_retomar_un_contacto_existente_marca(self):
+        self.borrador()
+        await self.cargar_lote()
+        dejo = lambda: self.socio(9100, "Razón del Padrón")
+        with self.toolbelt(crea=False, efecto=dejo, empresa_id=9100, empresa="Razón del Padrón",
+                           avisos=["Falta un dato fiscal."]):
+            await self.aprobar(destino="principal")
+        self.assertEqual(self.factura_de(1)["partner_id"][0], 9100)
+        self.assertIn("Falta un dato fiscal.", self.factura_de(1)["narration"])
+
+    async def test_un_texto_tecnico_del_toolbelt_no_llega_a_la_nota(self):
+        self.borrador()
+        await self.cargar_lote()
+        with self.toolbelt(rc=1, crea=False, error="Traceback (most recent call last): /srv/alta.py"):
+            r = await self.aprobar(destino="principal")
+        self.assertNotIn("Traceback", self.factura_de(1)["narration"])
+        self.assertNotIn("Traceback", r["content"][0]["text"])
+
+    def test_declarar_frenar_es_lo_mismo_que_omitirlo(self):
+        antes = self.seleccion("principal")["firma"]
+        self.raiz["empresas"]["taller"]["ante_error"] = "frenar"
+        self.assertEqual(self.seleccion("principal")["firma"], antes)
+
+    def test_si_no_entran_todas_las_lineas_las_marcadas_van_primero(self):
+        plan = {"comprobantes": [{"n": n, "comercio": f"Comercio {n}", "moneda": "XTS", "importe": "1"}
+                                 for n in range(1, 15)]}
+        resultado = {"facturas": {str(n): 40000 + n for n in range(1, 15)},
+                     "revision": {"14": {"factura": 40014, "motivos": ["Motivo de la catorce."]}}}
+        texto = g.texto_carga(resultado, plan, self.seleccion("principal"))
+        self.assertIn("Motivo de la catorce.", texto)
+        self.assertIn("1 quedó marcado", texto)

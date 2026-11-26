@@ -495,6 +495,8 @@ def seleccionar(raiz, user, args):
     for campo in ("proveedor_a_regularizar", "responsable_revision"):
         if campo in c:
             efectivo[campo] = c[campo]["ids"][destino]
+    if efectivo.get("ante_error") == "frenar":
+        del efectivo["ante_error"]      # declararlo es lo mismo que omitirlo: la firma no cambia
     # La política y la activación de RRHH no forman parte de la aprobación fiscal.
     fuera = (*SIN_FIRMA, "politica", "rendicion") if "rendicion" in c else SIN_FIRMA
     para_firmar = {k: v for k, v in efectivo.items() if k not in fuera}

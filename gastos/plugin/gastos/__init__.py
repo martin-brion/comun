@@ -616,16 +616,25 @@ async def _preparar_fiscal(ctx, c, lote_id, clean):
             await fiscal.validar_impuestos(ctx, c, f, g)
             await fiscal.proveedor(ctx, c, f, g)
             from . import proveedores
-            if borrador and not f.get('partner_id') and (c.get('padron_proveedores') or not f.get('cuit')):
+            if borrador and c.get('padron_proveedores') == 'AR' and not re.fullmatch(r"\d{5}-\d{8}", f["numero_odoo"]):
+                # Odoo rechaza un número argentino sin punto de venta y número: va sin impuestos, con lo leído en la nota.
+                f = fiscal.sin_impuestos(f"el número leído ({f['numero']}) no tiene punto de venta y número", lec,
+                                         documento=f["documento"], numero=f["numero"], cuit=f["cuit"],
+                                         documento_leido=f["documento_leido"])
+            elif borrador and not f.get('partner_id'):
                 # ante_error=borrador: el proveedor que falta no frena; la factura queda marcada para Administración.
                 if c.get('padron_proveedores'):
                     await proveedores.proponer_borrador(ctx, c, f, x["comercio"], g)
+                elif f.get('cuit'):
+                    await proveedores.a_regularizar(ctx, c, f, g)
+                    proveedores._marcar(f, f"El proveedor CUIT/RUT {f['cuit']} no está en Odoo: "
+                                           f"{proveedores.A_REGULARIZAR}.")
                 else:
                     await proveedores.a_regularizar(ctx, c, f, g)
                     proveedores._marcar(f, f'No se leyó el CUIT/RUT del emisor: {proveedores.A_REGULARIZAR}.')
             elif c.get('padron_proveedores') and not f.get('partner_id'):
                 await proveedores.proponer(ctx, c, f, x["comercio"], g)
-        elif borrador and f["motivo"] != _SIN_FISCAL_DESTINO:
+        if f["modo"] != fiscal.CON_IMPUESTOS and borrador and f["motivo"] != _SIN_FISCAL_DESTINO:
             f["revision"] = [f"Va sin impuestos porque {f['motivo']}: falta completar proveedor, documento e impuestos."]
         previo = await fiscal.ya_cargado(ctx, c, f, g) if admite else None
         if previo:
@@ -1144,7 +1153,10 @@ def _contexto(ctx, args):
 
 
 def _vigencia(ctx, c):
-    actual = _seleccionar(ctx, {"empresa": c["empresa"], "destino": c["destino"]})
+    try:
+        actual = _seleccionar(ctx, {"empresa": c["empresa"], "destino": c["destino"]})
+    except GastoError as exc:
+        raise GastoFrena(str(exc)) from None
     if actual["firma"] != c["firma"] or ("rendicion" not in c and actual["employee_id"] != c["employee_id"]):
         raise GastoFrena("Cambió la configuración o el empleado de la corrida; prepará y aprobá otra propuesta")
     if c.get("_huella_aprobada") and huella(c["_lote"]["lote_id"]) != c["_huella_aprobada"]:
@@ -1188,6 +1200,13 @@ async def _operacion(ctx, args, cargar_corrido=False, aprobacion=None):
                     if aprobacion is not None and aprobacion != huella(lote_id):
                         raise GastoError("La propuesta cambió o no tiene la aprobación exacta. Volvé a revisar.")
                     c["_huella_aprobada"] = huella(lote_id)
+                    recibo = estado.recibo(lote_id, c)
+                    if (configuracion.ante_error_borrador(c) and recibo and recibo.get("estado") == "cargado"
+                            and recibo.get("huella") == c["_huella_aprobada"]):
+                        # Repetir el OK de una carga completa devuelve lo registrado: Administración puede haber
+                        # confirmado una factura desde entonces, y volver a verificarla como borrador la daría por perdida.
+                        resultado = await _con_seguimiento(ctx, c, _leer(lote_id), recibo["resultado"])
+                        return {**resultado, "empresa": c["empresa"], "destino": c["destino"]}
                     resultado = await _cargar(ctx, args)
                     if resultado.get("estado") == "parcial":
                         # Se cortó (ante_error=borrador): lo cargado queda y la corrida sigue abierta para retomarla.
@@ -1367,7 +1386,7 @@ def texto_carga(resultado, plan, c):
     por_n = {str(x["n"]): x for x in plan.get("comprobantes", [])}
     altas = resultado.get("altas_proveedor") or []
     razones = {a["id_fiscal"]: a["nombre"] for a in altas}
-    if "revision" in resultado or "no_cargados" in resultado:
+    if "revision" in resultado or "no_cargados" in resultado or "por_conciliar" in resultado:
         return _texto_borrador(resultado, por_n, link, altas)
     lineas = []
     for n, ident in sorted((resultado.get("facturas") or {}).items(), key=lambda kv: int(kv[0])):
@@ -1409,12 +1428,20 @@ def _texto_borrador(resultado, por_n, link, altas):
     facturas, revision = resultado.get("facturas") or {}, resultado.get("revision") or {}
     no_cargados = resultado.get("no_cargados") or {}
     lineas = []
-    for n in sorted({*facturas, *no_cargados}, key=int):
+    # Si no entran todas, primero las que piden algo (sin cargar o marcadas): el resto lleva solo su link.
+    por_conciliar = resultado.get("por_conciliar") or {}
+    orden = sorted({*facturas, *no_cargados, *por_conciliar}, key=int)
+    if len(orden) > _MAX_LINEAS_CARGA:
+        orden = sorted(orden, key=lambda n: (n not in no_cargados and n not in por_conciliar and n not in revision,
+                                             int(n)))
+    for n in orden:
         x = por_n.get(n, {})
         monto = f"{x.get('moneda', '')} {_monto_visible(x.get('importe', ''))}".strip()
         quien = f"Foto {n} · {x.get('comercio', '')} · {monto}"
         if n in no_cargados:
             lineas.append(f"• ✖ {quien}: no la cargué, {no_cargados[n][:_TOPE_MOTIVO]}")
+        elif n in (resultado.get("por_conciliar") or {}):
+            lineas.append(f"• ✖ {quien}: no la pude verificar, {resultado['por_conciliar'][n][:_TOPE_MOTIVO]}")
         elif n in revision:
             motivo = " ".join(revision[n]["motivos"])
             motivo = motivo if len(motivo) <= _TOPE_MOTIVO else motivo[:_TOPE_MOTIVO - 1].rstrip() + "…"
@@ -1425,7 +1452,9 @@ def _texto_borrador(resultado, por_n, link, altas):
     cabeza = (f"Cargué {len(facturas)} en borrador" + (f"; {marcados} para que los revise Administración:" if revision
                                                        else ":"))
     pie = []
-    if resultado.get("estado") == "parcial":
+    if por_conciliar:
+        pie.append("Las que no pude verificar las tiene que revisar Administración en Odoo antes de repetir la carga.")
+    elif resultado.get("estado") == "parcial":
         pie.append("La carga se cortó: repetila y retomo desde donde quedó, sin duplicar.")
     elif no_cargados:
         pie.append("Las que no cargué las tiene que ver Administración.")
