@@ -17,6 +17,7 @@ Ideas de capacidad, workflow o herramientas que todavía no se construyen. Lo de
 | 7 | Baja | atlas: podar la caché de resúmenes | La caché guarda resúmenes de archivos que ya no existen o cambiaron; no molesta, pero crece | S `[SUPUESTO]` | idea | atlas del conocimiento |
 | 8 | Media | vigia: avisos de los proyectos como señal que solo frena | Una versión retirada por un error grave o con una instrucción especial de actualización hoy no se ve: el registro y el escáner no la dicen | M `[SUPUESTO]` | idea | revisión independiente de vigia 0.5.0 |
 | 9 | Media | vigia: escáner en una hoja remota | El vigía observa una hoja por ssh pero no la escanea: sin escáner no hay urgencia ni KEV allí, salvo que el vigía corra en la hoja | M `[SUPUESTO]` | idea | revisión independiente de vigia 0.5.0 |
+| 10 | Media | gastos: borrador también ante un error de imputación o de categoría | Con ante_error=borrador, una imputación que el validador rechaza o una categoría ambigua siguen frenando el lote entero: la factura necesita cuenta y analítica para verificarse | M `[SUPUESTO]` | idea | pedido de borrador ante errores (gastos 0.1.0-dev.19) |
 
 Estados: `idea → en evaluación → aprobada → en curso → hecha / descartada`.
 
@@ -91,3 +92,16 @@ Estados: `idea → en evaluación → aprobada → en curso → hecha / descarta
   vigía en cada hoja.
 - **Plan:** esquema del resultado y su vigencia en el contrato; pruebas con un resultado vencido, ilegible o de otra
   imagen.
+
+### 10 · gastos: borrador también ante un error de imputación o de categoría
+
+- **Problema:** el pedido de borrador ante errores incluye «imputación o política que hoy rechazan (categoría ambigua,
+  validador de imputación)». La 0.1.0-dev.19 no lo cubre: el imputador recibe todo el lote junto (una excepción no se puede
+  atribuir a un comprobante) y la factura estándar se verifica línea por línea con la cuenta de la categoría y la analítica.
+  La política de conducta no aplica: en el circuito de facturas ya no bloquea.
+- **Propuesta:** con ante_error=borrador, un comprobante sin imputación válida o con una categoría que no resuelve entra con
+  una cuenta y una analítica «a regularizar» declaradas por empresa y destino, marcado con el motivo; la verificación acepta
+  esa forma solo en una factura marcada.
+- **Plan:** decidir con el dueño las claves nuevas (cuenta y analítica a regularizar) y si un imputador que falla con todo el
+  lote marca todos los comprobantes; pedir al imputador un resultado por línea (`pendiente` por comprobante) en una versión
+  nueva de su contrato.
