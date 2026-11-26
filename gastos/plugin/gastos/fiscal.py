@@ -206,11 +206,25 @@ def narracion(texto):
     return f"<p>{html.escape(texto)}</p>"
 
 
+def motivos(f):
+    """Por qué el comprobante quedó marcado para que lo revise Administración (ante_error=borrador): lo que se supo al
+    preparar, que está en la propuesta, y lo que se supo al cargar (el alta, el listado de emisores observados)."""
+    return [*(f or {}).get("revision", []), *(f or {}).get("revision_carga", [])]
+
+
+def aviso_revision(f):
+    """El encabezado de la nota de un comprobante marcado: el motivo en castellano llano, para Administración."""
+    lista = motivos(f)
+    if not lista:
+        return ""
+    return "Para revisar: el bot lo cargó en borrador con problemas. " + " ".join(lista)
+
+
 def nota(f):
-    """La nota de la factura: el desglose leído, con qué tipo se carga si la configuración lo cambia y, si el CUIT/RUT se
-    repetía, qué proveedor se eligió."""
-    return "".join(narracion(t) for t in (f["desglose"], aviso_carga(f), f.get("proveedor_aviso"), aviso_redondeo(f),
-                                          f.get("correccion_aviso")) if t)
+    """La nota de la factura: si quedó marcada, por qué; el desglose leído, con qué tipo se carga si la configuración lo
+    cambia y, si el CUIT/RUT se repetía, qué proveedor se eligió."""
+    return "".join(narracion(t) for t in (aviso_revision(f), f.get("observado"), f["desglose"], aviso_carga(f),
+                                          f.get("proveedor_aviso"), aviso_redondeo(f), f.get("correccion_aviso")) if t)
 
 
 def aviso_redondeo(f):
@@ -501,7 +515,11 @@ def completa_administracion(f):
         return [f"Cargar proveedor, tipo y número de documento e impuestos (va sin impuestos porque {f['motivo']}); "
                 "el desglose leído está en la factura."]
     tareas = ["Revisar contra la foto y confirmar."]
-    if not f.get("partner_id") and not f.get("alta_proveedor"):
+    if f.get("a_regularizar"):
+        tareas.append(f"Cambiar el proveedor a regularizar por el del CUIT/RUT {f['cuit'] or 'del comprobante'}.")
+    elif f.get("pendiente"):
+        tareas.append(f"Regularizar el alta fiscal del proveedor CUIT/RUT {f['cuit']}: repetir el alta lo valida.")
+    elif not f.get("partner_id") and not f.get("alta_proveedor"):
         tareas.append(f"Dar de alta al proveedor CUIT/RUT {f['cuit'] or 'ilegible'} y elegirlo.")
     elif f.get("proveedor_aviso"):
         tareas.append("Confirmar el proveedor elegido entre los que tienen el mismo CUIT/RUT.")
@@ -521,21 +539,34 @@ def proveedor_nuevo(f):
     return f"proveedor nuevo, CUIT/RUT {a['id_fiscal']}, con los datos de {'ARCA' if a['pais'] == 'AR' else 'DGI'}"
 
 
+# Lo que la carga suma en memoria al comprobante aprobado y no forma parte de lo firmado: lo que dijo el alta (con el
+# proveedor que resolvió) y el listado de emisores observados.
+DE_LA_CARGA = ("revision_carga", "observado")
+DE_LA_CARGA_ALTA = ("proveedor_aviso", "a_regularizar", "pendiente")
+
+
 def sin_alta(x):
-    """El comprobante tal como se aprobó: el proveedor que resolvió el alta no forma parte de lo firmado."""
+    """El comprobante tal como se aprobó: el proveedor que resolvió el alta, y lo que la carga supo después, no forman parte
+    de lo firmado."""
     f = x.get("fiscal")
-    if not (f and f.get("alta_proveedor")):
+    if not f:
         return x
-    return {**x, "fiscal": {k: v for k, v in {**f, "partner_id": 0, "proveedor": ""}.items() if k != "proveedor_aviso"}}
+    if f.get("alta_proveedor"):
+        f = {k: v for k, v in {**f, "partner_id": 0, "proveedor": ""}.items() if k not in DE_LA_CARGA_ALTA}
+    if any(k in f for k in DE_LA_CARGA):
+        f = {k: v for k, v in f.items() if k not in DE_LA_CARGA}
+    return x if f is x["fiscal"] else {**x, "fiscal": f}
 
 
 def visible(f):
     """Lo que ve la persona de la factura en la propuesta."""
+    revision = {"revision": motivos(f)} if motivos(f) else {}
     if f["modo"] != CON_IMPUESTOS:
-        return {"impuestos": "no", "motivo": f["motivo"], "completa_administracion": completa_administracion(f)}
-    return {"impuestos": "sí", "documento": nombre_documento(f),
-            "proveedor": (f.get("proveedor") or (proveedor_nuevo(f) if f.get("alta_proveedor") else
-                                                 f"sin proveedor en Odoo (CUIT/RUT {f['cuit'] or 'ilegible'})")),
+        return {"impuestos": "no", "motivo": f["motivo"], "completa_administracion": completa_administracion(f),
+                **revision}
+    return {"impuestos": "sí", "documento": nombre_documento(f), **revision,
+            "proveedor": (proveedor_visible(f) or (proveedor_nuevo(f) if f.get("alta_proveedor") else
+                                                   f"sin proveedor en Odoo (CUIT/RUT {f['cuit'] or 'ilegible'})")),
             **({"aviso_proveedor": f["proveedor_aviso"]} if f.get("proveedor_aviso") else {}),
             "lineas": [{"texto": l["etiqueta"], "importe": l["importe"]} for l in f["lineas"]],
             "iva": f["iva"],
@@ -544,17 +575,29 @@ def visible(f):
             "completa_administracion": completa_administracion(f)}
 
 
+def proveedor_visible(f):
+    """El proveedor como lo ve la persona: el a regularizar o el provisorio, dicho."""
+    if not f.get("proveedor"):
+        return ""
+    if f.get("a_regularizar"):
+        return f"{f['proveedor']} (proveedor a regularizar)"
+    if f.get("pendiente"):
+        return f"{f['proveedor']} (alta fiscal pendiente)"
+    return f["proveedor"]
+
+
 def resumen(f):
     """Una línea para la tarjeta del OK."""
+    revision = f" · ⚠️ queda marcada para Administración: {' '.join(motivos(f))}" if motivos(f) else ""
     if f["modo"] != CON_IMPUESTOS:
-        return f"sin impuestos ({f['motivo']})"
+        return f"sin impuestos ({f['motivo']}){revision}"
     partes = " + ".join(f"{l['etiqueta'].split(' · ')[0]} {l['importe']}" for l in f["lineas"])
-    proveedor = f.get("proveedor") or (proveedor_nuevo(f) if f.get("alta_proveedor") else
-                                       f"proveedor a dar de alta (CUIT/RUT {f['cuit'] or 'ilegible'})")
+    proveedor = proveedor_visible(f) or (proveedor_nuevo(f) if f.get("alta_proveedor") else
+                                         f"proveedor a dar de alta (CUIT/RUT {f['cuit'] or 'ilegible'})")
     if f.get("proveedor_aviso"):
         proveedor += f" (id {f['partner_id']}, elegido entre varios con el mismo CUIT/RUT)"
     percepciones = "".join(f" · {p['etiqueta']} {p['importe']}" for p in f.get("percepciones", []))
-    return f"{nombre_documento(f)} · {proveedor} · {partes} · IVA {f['iva']}{percepciones}"
+    return f"{nombre_documento(f)} · {proveedor} · {partes} · IVA {f['iva']}{percepciones}{revision}"
 
 
 # ------------------------------------------------------------------------------------------- Odoo (solo lectura)
@@ -646,6 +689,22 @@ async def proveedor(ctx, c, f, g, *, mantener=0):
     f["partner_id"], f["proveedor"] = elegido["id"], _texto(elegido.get("name") or "", 120)
 
 
+async def pendiente(ctx, c, cuit, g):
+    """El contacto provisorio de un alta que el padrón no validó ({id, name}, el de ID menor), por CUIT/RUT, empresa de la
+    compañía o compartida; None si no hay. Solo sirve para un borrador marcado (ante_error=borrador)."""
+    from .proveedores import PENDIENTE
+    if not cuit:
+        return None
+    candidatos = [cuit] + ([f"{cuit[:2]}-{cuit[2:10]}-{cuit[10]}"] if len(cuit) == 11 else [])
+    filas = await g._odoo(ctx, "res.partner", "search_read", [
+        ("vat", "in", candidatos), ("parent_id", "=", False), "|",
+        ("company_id", "=", c["company_id"]), ("company_id", "=", False)], fields=["name", "vat"],
+        limit=_MAX_REPETIDOS, order="id")
+    filas = sorted((r for r in filas if digitos(r.get("vat")) == cuit and (r.get("name") or "").startswith(PENDIENTE)),
+                   key=lambda r: r["id"])
+    return {"id": filas[0]["id"], "name": _texto(filas[0].get("name") or "", 120)} if filas else None
+
+
 async def ya_cargado(ctx, c, f, g, *, propio=0):
     """Una factura de proveedor de la compañía con el mismo tipo y número del mismo emisor, incluidos los borradores (Odoo
     recién frena el repetido al confirmar). El tipo es el de carga: con un cargar_como, el comprobante ya cargado lleva
@@ -669,9 +728,12 @@ async def ya_cargado(ctx, c, f, g, *, propio=0):
     cuits = {}
     if socios and f.get("cuit"):
         cuits = {r["id"]: digitos(r.get("vat")) for r in await g._odoo(ctx, "res.partner", "read", socios, fields=["vat"])}
+    # El proveedor a regularizar lleva facturas de emisores distintos: el mismo número con él no es el mismo comprobante.
+    generico = c.get("proveedor_a_regularizar")
     for r in filas:
         socio = g._rel(r.get("partner_id"))
-        if not socio or socio == f.get("partner_id") or (f.get("cuit") and cuits.get(socio) == f["cuit"]):
+        if (not socio or (socio == f.get("partner_id") and socio != generico)
+                or (f.get("cuit") and cuits.get(socio) == f["cuit"])):
             return {"id": r["id"], "name": r.get("name") or "", "state": r.get("state") or ""}
     return None
 

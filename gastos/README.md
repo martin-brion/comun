@@ -125,6 +125,27 @@ anulación como su inversa: si la instancia la lista en `directo.json`, la carga
 La rendición, un alta de proveedor y un destino con seguimiento siguen con tarjeta. Detalle en
 `CONTRATO.md`. Carga también en motores previos.
 
+0.1.0-dev.19: `ante_error`, por empresa. Sin la clave, o con `frenar`, todo como antes.
+Con `borrador`, un comprobante con un error de datos entra igual en borrador, marcado
+para Administración, y el error de uno no frena a los demás. Pide dos claves más, con
+un ID por destino, como el diario:
+
+```json
+"ante_error": "borrador",
+"proveedor_a_regularizar": {"ids": {"ensayo": 0, "principal": 0}},
+"responsable_revision": {"ids": {"ensayo": 0, "principal": 0}},
+"emisores_observados": "<proveedor de gastos.emisores/1, opcional>"
+```
+
+`proveedor_a_regularizar` es el contacto de Odoo que lleva la factura mientras falta el
+proveedor; `responsable_revision`, el usuario que recibe la actividad. Rige solo en el
+circuito de facturas y en un destino de factura `estandar`; en otro, como antes. Si el
+padrón rechaza el alta, el toolbelt corre con `--conservar-pendiente` y la factura lleva
+la provisoria. La nota de la factura dice el motivo y la actividad queda asignada; nada
+se confirma ni se envía. La persona recibe «Cargué N en borrador; M quedaron marcados…».
+Lo que impide escribir (Odoo, la identidad, la configuración) sí corta: lo cargado queda y
+un reintento retoma sin duplicar. Detalle en `CONTRATO.md`. Carga también en motores previos.
+
 0.1.0-dev.17: el plugin es el mismo de la dev.16, archivo por archivo. Cambian dos
 pruebas. El `fields_get` de Odoo 18 ya no es la copia de una base en producción: lo
 arman los tipos de Odoo 18 que piden los contratos del plugin, sin salir de ninguna

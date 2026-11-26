@@ -51,6 +51,11 @@ class GastoTecnico(GastoError):
         self.publico = publico
 
 
+class GastoFrena(GastoError):
+    """Lo que impide seguir escribiendo en la corrida (cambió la configuración o la propuesta, una escritura no permitida):
+    con ante_error=borrador corta la carga, no solo el comprobante."""
+
+
 @dataclass(frozen=True)
 class Imputador:
     """Punto de extensión de la rendición de gastos por foto (plugin gastos): a qué se imputa cada línea. El núcleo arma
@@ -256,8 +261,10 @@ async def _odoo(ctx, model, method, *args, **kw):
         if method not in _METODOS_LECTURA_PLUGIN and not (c and c.get("_aplicando") and (
                 (method == "create" and model in ("hr.expense", "hr.expense.sheet", "ir.attachment", "account.move"))
                 or _ajuste_de_impuesto(model, method, args))) and not (
-                c and c.get("_anulando") and method == "unlink" and model in _BORRABLES):
-            raise GastoError("La corrida no permite esta escritura")
+                c and c.get("_anulando") and method == "unlink" and model in _BORRABLES) and not (
+                c and c.get("_aplicando") and method == "create" and model == "mail.activity"
+                and configuracion.ante_error_borrador(c)):
+            raise GastoFrena("La corrida no permite esta escritura")
         if method not in _METODOS_LECTURA_PLUGIN:
             _vigencia(ctx, c)
         if c and "rendicion" in c and (model,method) != ("res.users","context_get"):
@@ -577,6 +584,10 @@ def _correccion(n, valor):
 
 AVISO_ALTA = ("\nAntes de cargar doy de alta a cada proveedor nuevo con los datos del padrón fiscal. Si el padrón no lo "
               "valida o no se parece a lo leído, no cargo ninguna factura.")
+AVISO_ALTA_BORRADOR = ("\nAntes de cargar doy de alta a cada proveedor nuevo con los datos del padrón fiscal. Si el padrón no "
+                       "lo valida, la factura entra igual en borrador, marcada para que la revise Administración.")
+# El motivo de una factura sin impuestos que no es un problema del comprobante: no la marca.
+_SIN_FISCAL_DESTINO = "el Odoo de destino no lleva documentos fiscales"
 AVISO_FISCAL = ("Con impuestos, la factura lleva proveedor, documento, número, IVA y percepciones del comprobante leído; "
                 "sin impuestos, lleva el desglose leído para que Administración la complete. Ninguna se confirma: la revisa "
                 "y la confirma Administración. ")
@@ -598,14 +609,24 @@ async def _preparar_fiscal(ctx, c, lote_id, clean):
         if x.get("correccion"):
             f["correccion_aviso"] = fiscal.aviso_correccion(leida, x["correccion"])
         if not admite and f["modo"] == fiscal.CON_IMPUESTOS:
-            f = fiscal.sin_impuestos("el Odoo de destino no lleva documentos fiscales", lec)
+            f = fiscal.sin_impuestos(_SIN_FISCAL_DESTINO, lec)
+        borrador = configuracion.ante_error_borrador(c)
         if f["modo"] == fiscal.CON_IMPUESTOS:
             await fiscal.validar_documento(ctx, c, f, g)
             await fiscal.validar_impuestos(ctx, c, f, g)
             await fiscal.proveedor(ctx, c, f, g)
-            if c.get('padron_proveedores') and not f.get('partner_id'):
-                from . import proveedores
+            from . import proveedores
+            if borrador and not f.get('partner_id') and (c.get('padron_proveedores') or not f.get('cuit')):
+                # ante_error=borrador: el proveedor que falta no frena; la factura queda marcada para Administración.
+                if c.get('padron_proveedores'):
+                    await proveedores.proponer_borrador(ctx, c, f, x["comercio"], g)
+                else:
+                    await proveedores.a_regularizar(ctx, c, f, g)
+                    proveedores._marcar(f, f'No se leyó el CUIT/RUT del emisor: {proveedores.A_REGULARIZAR}.')
+            elif c.get('padron_proveedores') and not f.get('partner_id'):
                 await proveedores.proponer(ctx, c, f, x["comercio"], g)
+        elif borrador and f["motivo"] != _SIN_FISCAL_DESTINO:
+            f["revision"] = [f"Va sin impuestos porque {f['motivo']}: falta completar proveedor, documento e impuestos."]
         previo = await fiscal.ya_cargado(ctx, c, f, g) if admite else None
         if previo:
             raise GastoError(fiscal.aviso_duplicado(x, f, previo))
@@ -875,7 +896,13 @@ async def _cargar(ctx, args):
     await _validar_carga(ctx, c, uid, plan)
     # Antes del recibo: si un alta falla no hay corrida iniciada y se puede preparar de nuevo sin esa foto.
     from . import proveedores
-    altas = await proveedores.resolver(ctx, c, plan, sys.modules[__name__])
+    if configuracion.ante_error_borrador(c):
+        # ante_error=borrador: un alta que no queda no frena; antes de la primera factura se sabe con qué proveedor va
+        # cada una, y si el emisor figura entre los observados.
+        altas = await proveedores.resolver_borrador(ctx, c, plan, sys.modules[__name__])
+        await _observados(ctx, c, plan)
+    else:
+        altas = await proveedores.resolver(ctx, c, plan, sys.modules[__name__])
     estado.iniciar(lote, c, huella(lote_id))
     c["_aplicando"] = True
     if "rendicion" in c:
@@ -1119,9 +1146,9 @@ def _contexto(ctx, args):
 def _vigencia(ctx, c):
     actual = _seleccionar(ctx, {"empresa": c["empresa"], "destino": c["destino"]})
     if actual["firma"] != c["firma"] or ("rendicion" not in c and actual["employee_id"] != c["employee_id"]):
-        raise GastoError("Cambió la configuración o el empleado de la corrida; prepará y aprobá otra propuesta")
+        raise GastoFrena("Cambió la configuración o el empleado de la corrida; prepará y aprobá otra propuesta")
     if c.get("_huella_aprobada") and huella(c["_lote"]["lote_id"]) != c["_huella_aprobada"]:
-        raise GastoError("La propuesta cambió durante la carga; no se continúa")
+        raise GastoFrena("La propuesta cambió durante la carga; no se continúa")
 
 
 def _validar_seleccion(plan, c):
@@ -1162,8 +1189,12 @@ async def _operacion(ctx, args, cargar_corrido=False, aprobacion=None):
                         raise GastoError("La propuesta cambió o no tiene la aprobación exacta. Volvé a revisar.")
                     c["_huella_aprobada"] = huella(lote_id)
                     resultado = await _cargar(ctx, args)
-                    estado.completar(lote_id, c, resultado)
-                    resultado = await _con_seguimiento(ctx, c, _leer(lote_id), resultado)
+                    if resultado.get("estado") == "parcial":
+                        # Se cortó (ante_error=borrador): lo cargado queda y la corrida sigue abierta para retomarla.
+                        resultado = {**resultado, "texto": texto_carga(resultado, _leer(lote_id), c)}
+                    else:
+                        estado.completar(lote_id, c, resultado)
+                        resultado = await _con_seguimiento(ctx, c, _leer(lote_id), resultado)
                 else:
                     recibo = estado.recibo(lote_id, c)
                     if recibo and recibo.get("estado") == "cargado":
@@ -1275,6 +1306,10 @@ def _validar_seguimiento(p):
 async def _con_seguimiento(ctx, c, plan, resultado):
     salida = {**resultado, 'texto': texto_carga(resultado, plan, c)}
     nombre = c.get('seguimiento')
+    if resultado.get('no_cargados'):
+        # El seguimiento ve solo los comprobantes que tienen factura.
+        plan = {**plan, 'comprobantes': [x for x in plan.get('comprobantes', [])
+                                         if str(x['n']) in (resultado.get('facturas') or {})]}
     if nombre:
         try:
             proveedor = plugins.resolver_extension('gastos.seguimiento', 1, nombre)
@@ -1332,6 +1367,8 @@ def texto_carga(resultado, plan, c):
     por_n = {str(x["n"]): x for x in plan.get("comprobantes", [])}
     altas = resultado.get("altas_proveedor") or []
     razones = {a["id_fiscal"]: a["nombre"] for a in altas}
+    if "revision" in resultado or "no_cargados" in resultado:
+        return _texto_borrador(resultado, por_n, link, altas)
     lineas = []
     for n, ident in sorted((resultado.get("facturas") or {}).items(), key=lambda kv: int(kv[0])):
         x = por_n.get(str(n), {})
@@ -1360,6 +1397,86 @@ def texto_carga(resultado, plan, c):
                       *([f"…y {resto} más del lote {plan.get('lote_id', '')}."] if resto > 0 else []),
                       *(f"• Proveedor nuevo: {a['nombre']}, CUIT/RUT {a['id_fiscal']} → {link('res.partner', a['id'])}"
                         for a in altas)])
+
+
+_TOPE_MOTIVO = 160
+
+
+def _texto_borrador(resultado, por_n, link, altas):
+    """Con ante_error=borrador: «Cargué N en borrador; M quedaron marcados para que los revise Administración», una línea
+    por factura con su link (la marcada, con su motivo) y una por comprobante que no se cargó. La misma lista
+    (resultado["revision"]) es la que toma el aviso a Administración."""
+    facturas, revision = resultado.get("facturas") or {}, resultado.get("revision") or {}
+    no_cargados = resultado.get("no_cargados") or {}
+    lineas = []
+    for n in sorted({*facturas, *no_cargados}, key=int):
+        x = por_n.get(n, {})
+        monto = f"{x.get('moneda', '')} {_monto_visible(x.get('importe', ''))}".strip()
+        quien = f"Foto {n} · {x.get('comercio', '')} · {monto}"
+        if n in no_cargados:
+            lineas.append(f"• ✖ {quien}: no la cargué, {no_cargados[n][:_TOPE_MOTIVO]}")
+        elif n in revision:
+            motivo = " ".join(revision[n]["motivos"])
+            motivo = motivo if len(motivo) <= _TOPE_MOTIVO else motivo[:_TOPE_MOTIVO - 1].rstrip() + "…"
+            lineas.append(f"• ⚠️ {quien}: {motivo} → {link('account.move', facturas[n])}")
+        else:
+            lineas.append(f"• {quien} → {link('account.move', facturas[n])}")
+    marcados = ("1 quedó marcado" if len(revision) == 1 else f"{len(revision)} quedaron marcados")
+    cabeza = (f"Cargué {len(facturas)} en borrador" + (f"; {marcados} para que los revise Administración:" if revision
+                                                       else ":"))
+    pie = []
+    if resultado.get("estado") == "parcial":
+        pie.append("La carga se cortó: repetila y retomo desde donde quedó, sin duplicar.")
+    elif no_cargados:
+        pie.append("Las que no cargué las tiene que ver Administración.")
+    if resultado.get("sin_actividad"):
+        pie.append(f"No pude dejarle la actividad de revisión a Administración en la foto "
+                   f"{', '.join(sorted(resultado['sin_actividad'], key=int))}: la nota está en la factura.")
+    return "\n".join([cabeza, *lineas[:_MAX_LINEAS_CARGA],
+                      *([f"…y {len(lineas) - _MAX_LINEAS_CARGA} más."] if len(lineas) > _MAX_LINEAS_CARGA else []),
+                      *(f"• Proveedor nuevo: {a['nombre']}, CUIT/RUT {a['id_fiscal']} → {link('res.partner', a['id'])}"
+                        for a in altas), *pie])
+
+
+def _validar_observados(p):
+    if not asyncio.iscoroutinefunction(getattr(p, "consultar", None)):
+        raise ValueError("Proveedor de emisores observados incompatible")
+
+
+async def _observados(ctx, c, plan):
+    """ante_error=borrador, antes de la primera factura: si la empresa declara emisores_observados (gastos.emisores/1, de
+    la casa: async consultar(ctx, marco, id_fiscal) -> {"observado": bool, "texto": str}), un emisor observado marca su
+    comprobante, y la nota de cada comprobante marcado dice qué dio la consulta. Una falla no frena: la nota lo dice."""
+    nombre = c.get("emisores_observados")
+    if not nombre:
+        return
+    consultas = {}
+    try:
+        proveedor = plugins.resolver_extension("gastos.emisores", 1, nombre)
+    except Exception:                                   # noqa: BLE001 - la consulta es una ayuda: no frena la carga
+        proveedor = None
+    for x in plan["comprobantes"]:
+        f = x.get("fiscal")
+        cuit = (f or {}).get("cuit")
+        if not cuit:
+            continue
+        if cuit not in consultas:
+            try:
+                if proveedor is None:
+                    raise ValueError("sin proveedor")
+                r = await proveedor.consultar(ctx, _marco(ctx, c, plan["odoo_uid"]), cuit)
+                texto = " ".join(str(r.get("texto") or "").split())[:300] if isinstance(r, dict) else ""
+                if not texto or type(r.get("observado")) is not bool:
+                    raise ValueError("respuesta inválida")
+                consultas[cuit] = (r["observado"], texto)
+            except Exception as exc:                    # noqa: BLE001
+                log.warning("gastos: no se pudo consultar emisores observados (%s)", type(exc).__name__)
+                consultas[cuit] = (False, f"No pude consultar si el CUIT/RUT {cuit} figura entre los emisores observados.")
+        observado, texto = consultas[cuit]
+        if observado:
+            f.setdefault("revision_carga", []).append(texto)
+        elif fiscal.motivos(f):
+            f["observado"] = texto
 
 
 async def preparar(ctx, args):
@@ -1447,8 +1564,19 @@ async def _revalidar_fiscal(ctx, c, plan):
         copia = json.loads(json.dumps(f))
         await fiscal.validar_documento(ctx, c, copia, g)
         await fiscal.validar_impuestos(ctx, c, copia, g)
+        if f.get("alta_proveedor"):
+            continue        # el proveedor lo resuelve el alta, con el OK
+        if f.get("a_regularizar"):
+            # El proveedor a regularizar de la propuesta tiene que seguir siendo el de la configuración, y válido.
+            from . import proveedores
+            if c.get("proveedor_a_regularizar") != f["partner_id"]:
+                raise GastoError(f"Foto {x['n']}: cambió el proveedor a regularizar desde la propuesta; prepará otra.")
+            await proveedores.a_regularizar(ctx, c, copia, g)
+            continue
         await fiscal.proveedor(ctx, c, copia, g, mantener=f["partner_id"])
-        if copia["partner_id"] != f["partner_id"] and not f.get("alta_proveedor"):
+        if f.get("pendiente") and not copia["partner_id"]:
+            copia["partner_id"] = (await fiscal.pendiente(ctx, c, f["cuit"], g) or {}).get("id", 0)
+        if copia["partner_id"] != f["partner_id"]:
             raise GastoError(f"Foto {x['n']}: cambió el proveedor en Odoo desde la propuesta; prepará otra.")
 
 
@@ -1727,7 +1855,8 @@ async def _resumen_interno(ctx, args, tecnico):
            + "\n".join(filas) + f"\nFotos excluidas: {excluded}. "
            "Adjunto todos los respaldos de cada comprobante. Todo queda en borrador; no se envía ni contabiliza."
            + (" No aprueba conductas ni reembolsos; la rendición es independiente." if directo else "")
-           + (AVISO_ALTA if any((x.get("fiscal") or {}).get("alta_proveedor") for x in plan["comprobantes"]) else ""))
+           + ((AVISO_ALTA_BORRADOR if configuracion.ante_error_borrador(_CORRIDA.get() or {}) else AVISO_ALTA)
+              if any((x.get("fiscal") or {}).get("alta_proveedor") for x in plan["comprobantes"]) else ""))
 
 
 def _cargados_de_la_sala(lote, limite=5):
@@ -1833,7 +1962,8 @@ PLUGIN = plugins.Plugin(
             huella=_huella_rendir,resumen=_resumen_rendir,oculta_input=True),
     ), activar=_activar, puntos_extension=(plugins.PuntoExtension("gastos.imputador", 1, _validar_proveedor),
         plugins.PuntoExtension("gastos.politica", 1, _validar_politica),
-        plugins.PuntoExtension("gastos.seguimiento", 1, _validar_seguimiento)))
+        plugins.PuntoExtension("gastos.seguimiento", 1, _validar_seguimiento),
+        plugins.PuntoExtension("gastos.emisores", 1, _validar_observados)))
 
 
 # La sala personal del trámite de gastos: su nota de sistema le dice al modelo qué tools usar y qué workflow seguir.

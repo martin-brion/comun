@@ -4,9 +4,15 @@ Un solo programa da de alta las razones sociales de todos los circuitos: corre d
 credencial, por la puerta pública del motor (broker.ejecutar_toolbelt). Esa puerta usa siempre el ERP y la credencial
 globales del bot, así que el alta se ofrece solo en el destino que es ese ERP: en otro escribiría en el equivocado.
 
-Contrato del toolbelt: --cuit <número> --pais <AR|UY> [--razon-social=<lo leído>], ensayo por defecto y --apply para
-escribir, que agrega el motor. La última línea de su salida es `JSON {"empresa_id", "empresa", "creados", "avisos",
-"error"}`. Sale con 0 si está bien, 1 si no quedó nada, 2 por mal uso y 3 si escribió y la relectura no coincide.
+Contrato del toolbelt: --cuit <número> --pais <AR|UY> [--razon-social=<lo leído>] [--conservar-pendiente], ensayo por
+defecto y --apply para escribir, que agrega el motor. La última línea de su salida es `JSON {"empresa_id", "empresa",
+"creados", "avisos", "error", "pendiente_id"}`. Sale con 0 si está bien, 1 si no quedó nada, 2 por mal uso y 3 si escribió
+y la relectura no coincide. Con --conservar-pendiente, si el padrón rechaza el alta la provisoria queda activa con el
+prefijo PENDIENTE y su id en `pendiente_id` (rc sigue siendo 1). Repetir el alta con el mismo número la retoma.
+
+Con ante_error=borrador (0.1.0-dev.19) un alta que no queda no frena la carga: la factura va en borrador, marcada, con la
+provisoria o con el proveedor a regularizar de la configuración (proponer_borrador, resolver_borrador). Un alta se corre
+una sola vez por lote y CUIT/RUT: lo que resolvió queda en `<erp>.altas.json`, junto al recibo, y un reintento lo reusa.
 """
 import asyncio
 import json
@@ -40,9 +46,10 @@ def _leido(texto):
     return re.sub(r'\s+', ' ', re.sub(r'[/\\:]+', ' ', str(texto or ''))).strip(' -')[:120]
 
 
-def _argumentos(pedido):
+def _argumentos(pedido, conservar=False):
     argv = ['--cuit', pedido['id_fiscal'], '--pais', pedido['pais']]
-    return argv + ([f"--razon-social={pedido['leido']}"] if pedido['leido'] else [])
+    return (argv + ([f"--razon-social={pedido['leido']}"] if pedido['leido'] else [])
+            + (['--conservar-pendiente'] if conservar else []))
 
 
 def _resultado(salida):
@@ -57,14 +64,14 @@ def _resultado(salida):
     return None
 
 
-async def _correr(ctx, alta, pedido, aplicar, g):
+async def _correr(ctx, alta, pedido, aplicar, g, conservar=False):
     from bot import broker
     corrida = {}
 
     def al_correr(rc, salida):
         corrida.update(rc=rc, salida=salida)
 
-    respuesta = await broker.ejecutar_toolbelt(ctx, alta['repo'], alta['script'], _argumentos(pedido), aplicar,
+    respuesta = await broker.ejecutar_toolbelt(ctx, alta['repo'], alta['script'], _argumentos(pedido, conservar), aplicar,
                                                al_correr=al_correr)
     if 'rc' not in corrida:
         raise g.GastoTecnico(f"No pude correr el alta del proveedor: {broker.texto_de(respuesta)[:300]} {NO_FACTURA}",
@@ -149,4 +156,193 @@ async def resolver(ctx, c, plan, g):
     if avisos:
         raise g.GastoError('Di de alta al proveedor, pero no cargué ninguna factura: ' + ' '.join(avisos)
                            + ' Prepará de nuevo el lote: la propuesta va a mostrar la razón social del padrón.')
+    return altas
+
+
+# ------------------------------------------------------------------------------------- ante_error=borrador (0.1.0-dev.19)
+A_REGULARIZAR = 'va con el proveedor a regularizar'
+
+
+def _detalle(res):
+    """El motivo que dio el toolbelt, corto y en una línea; la salida cruda va al registro, no a la nota."""
+    texto = ' '.join(str((res or {}).get('error') or '').split())[:200]
+    return f' ({texto})' if texto else ''
+
+
+async def a_regularizar(ctx, c, f, g):
+    """El proveedor a regularizar de la configuración, para la factura que no tiene uno: tiene que ser un contacto activo
+    de la compañía o compartido. Si no, es un error de configuración y no se carga."""
+    ident = c['proveedor_a_regularizar']
+    if '_a_regularizar' not in c:
+        filas = await g._odoo(ctx, 'res.partner', 'read', [ident], fields=['name', 'company_id', 'active'])
+        if (len(filas) != 1 or filas[0].get('id') != ident or filas[0].get('active') is False
+                or g._rel(filas[0].get('company_id')) not in (0, c['company_id'])):
+            raise g.GastoError(f"El proveedor a regularizar {ident} de la configuración del bot (gastos.json) no es un "
+                               f"contacto activo de la compañía {c['company_id']}: corregí el ID en gastos.json.")
+        c['_a_regularizar'] = g.fiscal._texto(filas[0].get('name') or '', 120)
+    f.update(partner_id=ident, proveedor=c['_a_regularizar'], a_regularizar=True)
+    f.pop('pendiente', None)
+    f.pop('proveedor_aviso', None)
+
+
+def _marcar(f, motivo, clave='revision'):
+    f.setdefault(clave, [])
+    if motivo not in f[clave]:
+        f[clave].append(motivo)
+
+
+async def proponer_borrador(ctx, c, f, comercio, g):
+    """La propuesta de un comprobante sin proveedor válido, con ante_error=borrador: nunca frena por los datos. Pide el alta
+    (que corre con el OK) si se puede; si no, la factura va con el contacto provisorio del CUIT/RUT o con el proveedor a
+    regularizar, y queda marcada con el motivo. Solo lee: el ensayo del alta no escribe."""
+    cuit = f.get('cuit')
+    if not cuit:
+        await a_regularizar(ctx, c, f, g)
+        return _marcar(f, f'No se leyó el CUIT/RUT del emisor: {A_REGULARIZAR}.')
+    provisoria = await g.fiscal.pendiente(ctx, c, cuit, g)
+    alta = disponible(c)
+    pedido = {'id_fiscal': cuit, 'pais': c['padron_proveedores'], 'leido': _leido(comercio)}
+    if provisoria and alta:
+        f['alta_proveedor'] = pedido        # el alta con el OK la retoma: si el padrón ahora la valida, queda válida
+        return
+    if provisoria:
+        f.update(partner_id=provisoria['id'], proveedor=provisoria['name'], pendiente=True)
+        return _marcar(f, f'El proveedor CUIT/RUT {cuit} tiene el alta fiscal pendiente: va con su contacto provisorio.')
+    if not alta:
+        await a_regularizar(ctx, c, f, g)
+        return _marcar(f, f'El proveedor CUIT/RUT {cuit} no está en Odoo y en este destino el bot no da altas: '
+                          f'{A_REGULARIZAR}.')
+    try:
+        rc, salida, res = await _correr(ctx, alta, pedido, False, g)
+    except g.GastoTecnico as exc:
+        g.log.warning('gastos: no corrió el ensayo del alta: %s', str(exc)[:300])
+        await a_regularizar(ctx, c, f, g)
+        return _marcar(f, f'No pude consultar el alta del proveedor CUIT/RUT {cuit}: {A_REGULARIZAR}.')
+    if rc != 0 or res is None:
+        g.log.warning('gastos: el ensayo del alta terminó con %s: %s', rc, salida[-300:])
+        await a_regularizar(ctx, c, f, g)
+        return _marcar(f, f'El alta del proveedor CUIT/RUT {cuit} no pasó el ensayo{_detalle(res)}: {A_REGULARIZAR}.')
+    if res.get('empresa_id'):
+        await a_regularizar(ctx, c, f, g)
+        return _marcar(f, f"El CUIT/RUT {cuit} ya está en Odoo como {g.fiscal._texto(str(res.get('empresa') or ''), 120)} "
+                          f"(id {res['empresa_id']}), pero no sirve como proveedor de esta compañía: {A_REGULARIZAR}.")
+    f['alta_proveedor'] = pedido
+
+
+def _ruta_altas(lote_id, c):
+    from . import estado
+    p = estado.recibo_path(lote_id, c)
+    return estado.seguro(p.with_name(p.name.replace('.recibo.json', '.altas.json')))
+
+
+async def _buscar(ctx, c, fila, g):
+    """Después de un alta incierta, sin repetirla: la razón social válida del CUIT/RUT, o la provisoria, o None."""
+    copia = json.loads(json.dumps(fila))
+    await g.fiscal.proveedor(ctx, c, copia, g)
+    if copia['partner_id']:
+        return {'estado': 'validado', 'id': copia['partner_id'], 'nombre': copia['proveedor']}
+    provisoria = await g.fiscal.pendiente(ctx, c, fila['cuit'], g)
+    if provisoria:
+        return {'estado': 'pendiente', 'id': provisoria['id'], 'nombre': provisoria['name']}
+    return None
+
+
+async def _correr_alta(ctx, c, alta, fila, g):
+    """Corre el alta con --conservar-pendiente y dice qué quedó: {estado, id, nombre, motivo, creada}. estado es validado,
+    pendiente o generico (sin id: va el proveedor a regularizar). Un alta incierta (timeout, relectura distinta, el
+    toolbelt que no corre) no se repite: se busca por número."""
+    cuit = fila['alta_proveedor']['id_fiscal']
+    try:
+        rc, salida, res = await _correr(ctx, alta, fila['alta_proveedor'], True, g, conservar=True)
+    except g.GastoTecnico as exc:
+        g.log.warning('gastos: no corrió el alta del CUIT/RUT %s: %s', cuit, str(exc)[:300])
+        rc, salida, res = None, '', None
+    ident = (res or {}).get('empresa_id')
+    if rc == 0 and type(ident) is int and ident > 0:
+        creada = any(isinstance(a, dict) and a.get('tipo') == 'empresa' for a in res.get('creados') or [])
+        copia = json.loads(json.dumps(fila))
+        await g.fiscal.proveedor(ctx, c, copia, g)
+        if copia['partner_id'] and not (creada and copia['partner_id'] != ident):
+            avisos = ' '.join(' '.join(str(a).split()) for a in res.get('avisos') or [])[:300] if creada else ''
+            return {'estado': 'validado', 'id': copia['partner_id'], 'nombre': copia['proveedor'], 'creada': creada,
+                    'motivo': (f'El padrón dio de alta al proveedor CUIT/RUT {cuit} con un aviso: {avisos}' if avisos
+                               else '')}
+        rc = 'otro'         # quedó algo que no es el proveedor de la compañía: se resuelve como un alta incierta
+    pendiente_id = (res or {}).get('pendiente_id')
+    if rc == 1 and salida != 'timeout' and type(pendiente_id) is int and pendiente_id > 0:
+        filas = await g._odoo(ctx, 'res.partner', 'read', [pendiente_id], fields=['name', 'vat', 'company_id'])
+        if (len(filas) == 1 and filas[0].get('id') == pendiente_id and g.fiscal.digitos(filas[0].get('vat')) == cuit
+                and g._rel(filas[0].get('company_id')) in (0, c['company_id'])):
+            return {'estado': 'pendiente', 'id': pendiente_id, 'nombre': g.fiscal._texto(filas[0].get('name') or '', 120),
+                    'motivo': (f'El padrón rechazó el alta del proveedor CUIT/RUT {cuit}{_detalle(res)}: va con su '
+                               'contacto provisorio, marcado «alta fiscal pendiente».')}
+    if rc is None:
+        que = f'No pude correr el alta del proveedor CUIT/RUT {cuit}'
+    elif rc == 1 and salida == 'timeout':
+        que = f'El alta del proveedor CUIT/RUT {cuit} no terminó a tiempo'
+    elif rc == 3:
+        que = f'El alta del proveedor CUIT/RUT {cuit} escribió en Odoo pero la relectura no coincide: revisá ese contacto'
+    elif rc == 1 and (res or {}).get('error'):
+        que = f'El padrón rechazó el alta del proveedor CUIT/RUT {cuit}{_detalle(res)}'
+    else:
+        g.log.warning('gastos: el alta del CUIT/RUT %s terminó con %s: %s', cuit, rc, (salida or '')[-300:])
+        que = f'No pude dar de alta al proveedor CUIT/RUT {cuit}{_detalle(res)}'
+    hallado = await _buscar(ctx, c, fila, g)
+    if hallado and hallado['estado'] == 'validado' and rc == 1 and salida == 'timeout':
+        return {**hallado, 'motivo': ''}            # el alta llegó a Odoo: es el proveedor bueno
+    if hallado:
+        con = 'el proveedor que quedó en Odoo' if hallado['estado'] == 'validado' else 'su contacto provisorio'
+        return {**hallado, 'motivo': f'{que}: va con {con}.'}
+    return {'estado': 'generico', 'id': 0, 'nombre': '', 'motivo': f'{que}: {A_REGULARIZAR}.'}
+
+
+async def resolver_borrador(ctx, c, plan, g):
+    """resolver() con ante_error=borrador: un alta que no queda no frena nada. Cada CUIT/RUT pedido se da de alta una sola
+    vez por lote (lo resuelto queda en <erp>.altas.json antes y después de correr el alta: un corte en el medio cuenta como
+    alta incierta y no se repite). Cada factura de ese CUIT/RUT lleva el proveedor válido, la provisoria o el proveedor a
+    regularizar, y el motivo en revision_carga (en memoria: lo firmado no cambia). Devuelve las altas nuevas."""
+    from . import estado
+    pendientes = {}
+    for x in plan['comprobantes']:
+        f = x.get('fiscal') or {}
+        if f.get('alta_proveedor'):
+            pendientes.setdefault(f['alta_proveedor']['id_fiscal'], []).append(f)
+    if not pendientes:
+        return []
+    ruta = _ruta_altas(plan['lote_id'], c)
+    registro = estado.leer(ruta) or {'version': 1, 'altas': {}}
+    alta = disponible(c)
+    altas = []
+    locks = LOCKS.setdefault(asyncio.get_running_loop(), {})
+    for cuit, filas in pendientes.items():
+        previo = registro['altas'].get(cuit)
+        if previo and previo.get('estado') in ('validado', 'pendiente', 'generico'):
+            resuelto = previo                           # un reintento usa lo mismo que la primera vez
+        elif previo or not alta:
+            # Se cortó con el alta en curso, o ya no hay alta desde el bot: no se corre (otra vez).
+            hallado = await _buscar(ctx, c, filas[0], g)
+            que = (f'El alta del proveedor CUIT/RUT {cuit} quedó a medias' if previo else
+                   f'Cambió el alta de proveedores desde la propuesta y no di de alta al CUIT/RUT {cuit}')
+            resuelto = ({**hallado, 'motivo': f"{que}: va con "
+                         f"{'el proveedor que quedó en Odoo' if hallado['estado'] == 'validado' else 'su contacto provisorio'}."}
+                        if hallado else {'estado': 'generico', 'id': 0, 'nombre': '', 'motivo': f'{que}: {A_REGULARIZAR}.'})
+        else:
+            registro['altas'][cuit] = {'estado': 'en_curso'}
+            estado.guardar(ruta, registro)
+            async with locks.setdefault(f"{c['erp']}|{c['company_id']}|{cuit}", asyncio.Lock()):
+                resuelto = await _correr_alta(ctx, c, alta, filas[0], g)
+            if resuelto.get('creada'):
+                altas.append({'id_fiscal': cuit, 'id': resuelto['id'], 'nombre': resuelto['nombre']})
+        registro['altas'][cuit] = {k: resuelto.get(k, '') for k in ('estado', 'id', 'nombre', 'motivo')}
+        estado.guardar(ruta, registro)
+        for f in filas:
+            if resuelto['estado'] == 'generico':
+                await a_regularizar(ctx, c, f, g)
+            else:
+                f.update(partner_id=resuelto['id'], proveedor=resuelto['nombre'])
+                f.pop('a_regularizar', None)
+                if resuelto['estado'] == 'pendiente':
+                    f['pendiente'] = True
+            if resuelto.get('motivo'):
+                _marcar(f, resuelto['motivo'], 'revision_carga')
     return altas
