@@ -1,6 +1,6 @@
 # Contrato de vigia
 
-Versión del contrato: 0.5.0-dev.1. Lo que sigue no cambia sin decirlo en el pedido antes de cortar.
+Versión del contrato: 0.5.0-dev.2. Lo que sigue no cambia sin decirlo en el pedido antes de cortar.
 
 ## 1. Reglas que no se negocian
 
@@ -282,13 +282,16 @@ cero; si no, se reintenta en la pasada siguiente. Lo que no se pudo medir no abr
 | `kev:<servidor>:<pieza>` | una pieza expuesta tiene un KEV sin arreglo publicado | un escaneo válido y la lista KEV leída dicen que ya no, o la pieza dejó de correr |
 | `kevimg:<servidor>:<pieza>` | una pieza expuesta tiene un KEV con arreglo pero no hay imagen nueva que aplicar, por más que el plazo `kev_expuesto` | aparece la candidata, o lo anterior |
 | `pausa` | el archivo `PAUSA` tiene más de `pausa_max_dias` | se borra |
-| `maquinas-censo`, `maquina-…` | el censo de máquinas no se puede leer; una esperada falta o está detenida; una corre sin que la lea un servidor del vigía y sin estar excluida a propósito (`sin_vigia`) | deja de pasar |
+| `maquinas-censo`, `maquina-…` | el censo de máquinas no se puede leer; una esperada falta o está detenida; una corre sin que la lea un servidor del vigía y sin estar excluida a propósito (`sin_vigia`); una entrada trae el nombre o el estado fuera de forma (`maquina-fuera-de-forma-<nombre saneado>`) | deja de pasar |
 
 ## 8. Lo que solo informa
 
 - **Censo de máquinas virtuales** (`maquinas`): un archivo que deja la instancia, `{"tomada", "maquinas": [{"nombre",
   "estado"}]}`, con `estado` en `corriendo`, `apagada` u otro; se compara con las esperadas (`{servidor, apagada,
-  sin_vigia}`). No enciende ni apaga nada.
+  sin_vigia}`). No enciende ni apaga nada. Una entrada con el nombre o el estado fuera de forma no invalida el
+  resto: se informa aparte, con el nombre saneado (solo letras, dígitos, `.`, `_` y `-`, recortado, más un sufijo de
+  su huella), y no se toma por ausente ni detenida. Una entrada que no es un objeto con un nombre de texto sí invalida
+  el archivo entero.
 - **Repositorios montados** (`repos`): el commit local (un comando de lectura de la instancia) contra la punta de su rama
   en el remoto, por https y el protocolo de git, sin credenciales. `al día`, `distinto del remoto` o `desconocido`. No
   propone nada: un addon se actualiza por su carril.

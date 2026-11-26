@@ -81,6 +81,7 @@ def ficha(corrida):
             r += [f"**Desconocido:** {m['motivo']}."]
         else:
             r += [f"- {n}: {e}" for n, e in sorted(m["maquinas"].items())]
+            r += [f"- {n}: fuera de forma ({motivo})" for n, motivo in sorted((m.get("fuera_de_forma") or {}).items())]
     if corrida.get("repos"):
         r += ["", "## Repositorios montados", "", "| Repositorio | Servidor | Rama | Local | Remoto | Estado |",
               "|---|---|---|---|---|---|"]
@@ -148,7 +149,9 @@ def resumen(corrida):
                       "nueva que aplicar"]
     m = corrida.get("maquinas")
     if m:
-        r += [f"Máquinas virtuales: {len(m['maquinas'])} en el censo." if m["estado"] == "ok"
+        fuera = len(m.get("fuera_de_forma") or {})
+        r += [f"Máquinas virtuales: {len(m['maquinas'])} en el censo"
+              + (f", {fuera} fuera de forma." if fuera else ".") if m["estado"] == "ok"
               else f"Máquinas virtuales: desconocido ({m['motivo']})."]
     distintos = [x for x in corrida.get("repos") or [] if x["estado"] != "al día"]
     if distintos:
