@@ -134,8 +134,15 @@ def texto(d, tope=CUERPO_MAX - ENCABEZADO_MAX - 2):
         if len(cuerpo) <= tope:
             return cuerpo
         if len(lineas) <= len(primero):
-            # Todas piden algo y no entran: se corta el listado de facturas, nunca lo que no entró ni los totales.
+            # Todas piden algo y no entran: se corta el listado de facturas, nunca lo que no entró ni los totales. Si lo
+            # que no entró solo ya no cabe, se resume, y los totales quedan al final.
             fin = "\n\n".join(cola)
+            if len(intro) + len(fin) + 200 > tope:
+                totales = [x for x in cola if x.startswith("Total cargado")]
+                resto = [x for x in cola if not x.startswith("Total cargado")]
+                lugar = max(0, tope - len(intro) - sum(len(x) for x in totales) - 200)
+                resumido = "\n\n".join(resto)[:lugar].rsplit("\n", 1)[0]
+                fin = "\n\n".join([resumido + f"\n…el detalle completo está en Odoo con el lote {d['lote_id']}.", *totales])
             lugar = max(0, tope - len(intro) - len(fin) - 60)
             listado = partes[1][:lugar].rsplit("\n", 1)[0] if len(partes) > 1 else ""
             return "\n\n".join(x for x in (intro, listado + f"\n…el resto está en Odoo con el lote {d['lote_id']}.", fin)

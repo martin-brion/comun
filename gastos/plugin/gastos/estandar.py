@@ -440,7 +440,12 @@ async def cargar(ctx, lote, c, plan, g):
             ident, entrada, ruta, datos = await _uno(ctx, lote, c, plan, x, g)
         except (g.GastoFrena, g.GastoTecnico, estado.EstadoError) as exc:
             frenado = f"se cortó la carga: {_publico(g, exc)}"
-            no_cargados[n] = frenado
+            _, datos = _intenciones(plan, c, g)
+            if (datos["fotos"].get(f"{plan['company_id']}/{x['n']}") or {}).get("id"):
+                # La factura ya está en Odoo, sin terminar: se completa al repetir la carga.
+                no_cargados[n] = f"la factura quedó creada sin terminar y se completa al repetir; {frenado}"
+            else:
+                no_cargados[n] = frenado
             continue
         except g.GastoError as exc:
             _, datos = _intenciones(plan, c, g)

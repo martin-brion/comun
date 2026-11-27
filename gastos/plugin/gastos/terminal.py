@@ -76,8 +76,14 @@ def archivos(carpeta):
     return salida
 
 
+MAX_FOTO = 25 * 1024 * 1024
+
+
 def huellas(fotos):
     import hashlib
+    for f in fotos:
+        if f.stat().st_size > MAX_FOTO:
+            raise Uso(f"{f.name}: pasa de {MAX_FOTO // (1024 * 1024)} MB")
     return [{"nombre": f.name, "sha256": hashlib.sha256(f.read_bytes()).hexdigest()} for f in fotos]
 
 
@@ -137,6 +143,14 @@ def eml(presentacion, carpeta, lote_id):
                 return ruta
             except FileExistsError:
                 continue
+            except OSError:
+                # Un destino sin enlaces duros (exFAT, FAT): se escribe el contenido ya completo, igual sin pisar.
+                try:
+                    with open(ruta, "xb") as f:
+                        f.write(Path(temporal).read_bytes())
+                    return ruta
+                except FileExistsError:
+                    continue
         raise OSError("ya hay demasiados borradores de este lote")
     finally:
         Path(temporal).unlink(missing_ok=True)
@@ -190,7 +204,7 @@ async def cargar(t, argv, g):
             raise Uso("«archivos» de la propuesta no es la lista de fotos de la carpeta, en orden y con su sha256: la "
                       f"carpeta cambió desde que se armó. Hoy es: {json.dumps(huellas(fotos))}")
         usadas = {n for x in propuesta["comprobantes"] if isinstance(x, dict)
-                  for n in (x.get("fotos") or [x.get("n")]) if type(n) is int}
+                  for n in (x.get("fotos") if isinstance(x.get("fotos"), list) else [x.get("n")]) if type(n) is int}
         leidas = lecturas_de(_json(a.lecturas, "las lecturas"), fotos, fiscal, usadas)
         cfg = configuracion.validar(config.config_funcion(g.FUNCION))
     except (Uso, configuracion.ConfigError) as exc:
@@ -227,7 +241,8 @@ async def cargar(t, argv, g):
         if a.lote_nuevo and intento == 0:
             if estado.cargados([lote["lote_id"]]) or _con_recibo(estado, lote["lote_id"]):
                 t.decir(f"error: el lote {lote['lote_id']} tiene una carga empezada o hecha: --lote-nuevo lo dejaría sin "
-                        "poder retomarla. Para otro destino o empresa, copiá las fotos a otra carpeta.")
+                        "poder retomarla. Con las mismas fotos no se abre otro lote; si hace falta, avisá a quien "
+                        "administra el bot.")
                 return 1
             store.set_extra(lote["id"], {**(lote.get("extra") or {}), "descartado": True})
             lote = t.lote_local("gastos", fotos)
@@ -252,6 +267,11 @@ async def cargar(t, argv, g):
         return 1
     lote_id = args["lote_id"]
     t.decir(f"Lote {lote_id}: " + ", ".join(f"foto {n} = {f.name}" for n, f in enumerate(fotos, 1)) + ".")
+    copias = [{"nombre": i.get("nombre"), "sha256": i["sha256"]} for i in lote["items"] if i["tipo"] == "foto"]
+    if copias != propuesta["archivos"]:
+        t.decir("error: las fotos del lote no son las que leyó el agente (la carpeta cambió mientras se copiaba): no se "
+                "prepara. Repetí con --lote-nuevo.")
+        return 1
     if not recibo:
         fiscal.guardar_lecturas(lote_id, {str(n): {"sha256": i["sha256"], "lectura": leidas[n]}
                                           for n, i in enumerate((i for i in lote["items"] if i["tipo"] == "foto"), 1)
@@ -289,6 +309,8 @@ async def cargar(t, argv, g):
         return 1
     if guardada.get("estado") == "lista":
         try:
+            if any(t.ctx.tapar(x) != x for x in [*guardada["para"], *guardada.get("cc", [])]):
+                raise OSError("un destinatario coincide con una de tus credenciales")
             ruta = eml({**guardada, "asunto": t.ctx.tapar(guardada["asunto"]), "cuerpo": t.ctx.tapar(guardada["cuerpo"])},
                        a.salida or a.carpeta, lote_id)
             t.decir(f"El mail que presenta el lote quedó en {ruta}, sin enviar: abrilo con tu cliente de correo, revisalo y "

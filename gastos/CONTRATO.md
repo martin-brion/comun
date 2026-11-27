@@ -642,7 +642,7 @@ Las fotos de `--carpeta` (jpg, jpeg, png o webp; un PDF frena: no se adjunta com
 lecturas son `{"<archivo>": lectura}` (esquema `fiscal.ESQUEMA`; null es «no se pudo leer»; una que no es un objeto ni
 null, o la que falta de una foto que va en un comprobante, frena nombrando la foto) y la propuesta, `{"archivos",
 "comprobantes", "excluir_fotos"}`: `archivos` es `[{"nombre", "sha256"}]` de la carpeta en orden, para que cada número de foto
-sea los bytes que el agente leyó. Antes de preparar se normalizan todas las fotos con
+sea los bytes que el agente leyó; las copias del lote se cotejan contra esa lista antes de guardar las lecturas. Antes de preparar se normalizan todas las fotos con
 `vision_service`: si una no se puede adjuntar, o el servicio no está en esa máquina, no se escribe nada. Misma configuración,
 custodia, firma, recibos y presentación que el chat; con las mismas lecturas la propuesta es la misma salvo el número de lote,
 su `revision` (por eso la huella difiere) y lo que dependa del alta. El usuario del ERP sale de Odoo con las credenciales de la
@@ -657,7 +657,9 @@ lo registrado, como con `ante_error: borrador`. Repetir con el mismo material re
 No hay alta de proveedor (`proveedores.disponible(c, ctx)` es None con un contexto de terminal): con `ante_error: borrador`
 la factura va con el proveedor a regularizar, marcada; sin eso, frena como en un destino sin alta. La presentación, si la
 empresa la declara, queda en `<salida>/<lote>.eml` sin enviar (sin remitente y con `X-Unsent: 1`), con las credenciales de
-la terminal tapadas, escrito completo antes de tomar su nombre y sin pisar uno que ya está.
+la terminal tapadas (si un destinatario coincide con una, no se escribe), completo antes de tomar su nombre (también en un
+destino sin enlaces duros) y sin pisar uno que ya está. Una factura que quedó creada cuando la carga se cortó se dice así:
+se completa al repetir.
 Sale con 0 si la carga quedó completa y sin comprobantes afuera, 1 si no se cargó, quedó a medias o dejó alguno afuera, y 2
 por uso. Los rechazos se muestran como en el chat, sin detalle técnico. En un motor anterior el plugin carga igual, sin el
 comando.
