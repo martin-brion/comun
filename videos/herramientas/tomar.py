@@ -306,6 +306,8 @@ def main(argv: list[str]) -> int:
         time.sleep(0.5)
     if s.w:
         s.w.cerrar()
+    if s.term:
+        s.term.restaurar()
     if args.sin_grabar:
         print("ensayo terminado" + (f" con error en {error}" if error else ""))
         return 1 if error else 0

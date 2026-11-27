@@ -72,6 +72,7 @@ class Terminal:
         self.panel = resolver(self.cfg, correr)
         self.esc = esc
         self._base: str | None = None   # lo que mostraba el panel antes de escribir: lo viejo no cuenta como resultado
+        self._previa: str | None = None  # la pestaña que estaba al frente antes de la toma, para devolverla al final
 
     def estado(self) -> str:
         return str(self.correr("pane", "get", self.panel).get("pane", {}).get("agent_status", "unknown"))
@@ -82,15 +83,34 @@ class Terminal:
 
     # --- acciones del guion (argumento, marcas) -------------------------------------------------------------------
 
-    def enfocar(self, _arg=None, m=None) -> None:
-        """Trae la pestaña al frente en herdr."""
+    def enfocar(self, arg=None, m=None) -> None:
+        """Trae la pestaña al frente en herdr. Con `{esc: true}` (o `esc: true` en `terminal:` del guion), manda además
+        un Esc a la ventana del frente, que tiene que ser la de herdr: cierra un menú del cliente abierto (el de
+        sesiones, en ancho de celular), que si no queda tapando el panel y se graba con los nombres de otras sesiones."""
         t0 = m.ahora() if m else 0
+        if self._previa is None:
+            activo = [w for w in self.correr("workspace", "list").get("workspaces", []) if w.get("focused")]
+            self._previa = activo[0].get("active_tab_id", "") if activo else ""
         tab = self.correr("pane", "get", self.panel).get("pane", {}).get("tab_id")
         if tab:
             self.correr("tab", "focus", tab)
+        opciones = arg if isinstance(arg, dict) else {}
+        if opciones.get("esc", self.cfg.get("esc", False)):
+            if self.esc is None:
+                raise SystemExit("terminal.enfocar con esc necesita la superficie escritorio en la misma toma")
+            time.sleep(0.3)
+            self.esc.tecla("esc")
         time.sleep(0.8)
         if m:
             m.tramo("accion", t0)
+
+    def restaurar(self) -> None:
+        """Al terminar la toma: vuelve al frente la pestaña que estaba antes del primer `enfocar`."""
+        if self._previa:
+            try:
+                self.correr("tab", "focus", self._previa)
+            except RuntimeError:
+                pass   # la pestaña ya no existe
 
     def escribir(self, texto, m=None) -> None:
         """De a pocas letras, para que se vea tipear (la edición lo lleva a `letras_s` parejo)."""

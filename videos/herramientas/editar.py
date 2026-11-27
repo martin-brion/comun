@@ -96,7 +96,7 @@ def base_de(guion_ruta: Path) -> Path:
     if os.environ.get("VIDEOS_BASE"):
         return Path(os.path.expandvars(os.environ["VIDEOS_BASE"]))
     r = subprocess.run(["git", "-C", str(guion_ruta.resolve().parent), "rev-parse", "--show-toplevel"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")   # git habla UTF-8
     return Path(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else guion_ruta.resolve().parent
 
 
