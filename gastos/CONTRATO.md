@@ -639,9 +639,10 @@ OK → `gasto_cargar` fuera del chat: `python -m bot.terminal --entorno E --dato
 circuito de facturas y en un destino de factura `estandar`. `--nombre` es obligatorio: va en la propuesta, como en el chat.
 
 Las fotos de `--carpeta` (jpg, jpeg, png o webp; un PDF frena: no se adjunta como foto) se numeran por orden de nombre. Las
-lecturas son `{"<archivo>": lectura}` (esquema `fiscal.ESQUEMA`; una que no es un objeto frena nombrando la foto) y la
-propuesta, `{"archivos", "comprobantes", "excluir_fotos"}`: `archivos` tiene que ser la lista de la carpeta en orden, para
-que cada número de foto sea el archivo que el agente leyó. Antes de preparar se normalizan todas las fotos con
+lecturas son `{"<archivo>": lectura}` (esquema `fiscal.ESQUEMA`; null es «no se pudo leer»; una que no es un objeto ni
+null, o la que falta de una foto que va en un comprobante, frena nombrando la foto) y la propuesta, `{"archivos",
+"comprobantes", "excluir_fotos"}`: `archivos` es `[{"nombre", "sha256"}]` de la carpeta en orden, para que cada número de foto
+sea los bytes que el agente leyó. Antes de preparar se normalizan todas las fotos con
 `vision_service`: si una no se puede adjuntar, o el servicio no está en esa máquina, no se escribe nada. Misma configuración,
 custodia, firma, recibos y presentación que el chat; con las mismas lecturas la propuesta es la misma salvo el número de lote,
 su `revision` (por eso la huella difiere) y lo que dependa del alta. El usuario del ERP sale de Odoo con las credenciales de la
@@ -649,14 +650,20 @@ persona (`t.vincular_erp`). El OK es el de la terminal: teclear la huella en `/d
 
 El lote es de terminal (L900000 a L999999). Si su número ya tiene facturas en la compañía (`invoice_origin` con `[<lote>/`) y
 el lote no se usó en ninguna empresa ni destino, se descarta y se toma otro; si ya se usó, frena y pide `--lote-nuevo`, que
-descarta el lote local de ese material y empieza otro. En un lote de terminal, una factura con su marcador que esa corrida no
-empezó a crear no se adopta: es de otra terminal y pide conciliación. Repetir con el mismo material retoma la misma corrida.
+descarta el lote local de ese material y empieza otro, salvo que el lote tenga una carga empezada o hecha en algún destino.
+En un lote de terminal (`extra.terminal`), una factura con su marcador cuyo ID esa corrida no tiene en su evidencia no se
+adopta, tampoco tras una respuesta perdida: pide conciliación. Repetir el OK de una carga completa desde la terminal devuelve
+lo registrado, como con `ante_error: borrador`. Repetir con el mismo material retoma la misma corrida.
 No hay alta de proveedor (`proveedores.disponible(c, ctx)` es None con un contexto de terminal): con `ante_error: borrador`
 la factura va con el proveedor a regularizar, marcada; sin eso, frena como en un destino sin alta. La presentación, si la
-empresa la declara, queda en `<salida>/<lote>.eml` sin enviar (sin remitente y con `X-Unsent: 1`), sin pisar uno que ya está.
+empresa la declara, queda en `<salida>/<lote>.eml` sin enviar (sin remitente y con `X-Unsent: 1`), con las credenciales de
+la terminal tapadas, escrito completo antes de tomar su nombre y sin pisar uno que ya está.
 Sale con 0 si la carga quedó completa y sin comprobantes afuera, 1 si no se cargó, quedó a medias o dejó alguno afuera, y 2
 por uso. Los rechazos se muestran como en el chat, sin detalle técnico. En un motor anterior el plugin carga igual, sin el
 comando.
 
 También en la dev.21, en el chat: la tarjeta del OK dice el aviso del receptor de cada comprobante (`receptor_es_la_empresa` o
-un dígito mal leído), y un importe leído con más dígitos de los que entran al centavo (`1e30`) se toma como ilegible.
+un dígito mal leído), un importe leído con más dígitos de los que entran al centavo (`1e30`) se toma como ilegible, una foto
+que `vision_service` no puede normalizar al adjuntarla deja la carga a medias (se retoma) en vez de un error crudo, y si el
+detalle del mail de presentación no entra aunque todas sus facturas pidan algo, se corta el listado, nunca lo que no entró
+ni los totales.

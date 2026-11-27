@@ -845,8 +845,12 @@ async def _foto_adjuntar(ctx, lote, line, expense_id, respaldo, modelo="hr.expen
     path = Path(foto["ruta"])
     if hashlib.sha256(path.read_bytes()).hexdigest() != respaldo["sha256"]:
         raise GastoError(f"Foto {n}: cambió desde la propuesta; no se adjunta.")
-    normal = await imagen.normalizar(path.read_bytes(), max_px=config.ODOO_FOTO_MAX_PX,
-                                     calidad=config.ODOO_FOTO_CALIDAD)
+    try:
+        normal = await imagen.normalizar(path.read_bytes(), max_px=config.ODOO_FOTO_MAX_PX,
+                                         calidad=config.ODOO_FOTO_CALIDAD)
+    except imagen.ImagenError as exc:
+        raise GastoTecnico(f"Foto {n}: no pude normalizarla para adjuntarla ({exc})",
+                           publico=f"No pude preparar la foto {n} para adjuntarla: repetí la carga en un momento.") from None
     digest = hashlib.sha1(normal.datos).hexdigest()
     name = (f"Comprobante {line['marker']}.jpg" if n == line["n"] else
             f"Respaldo {line['marker']} foto {n:02d}.jpg")
@@ -1201,7 +1205,8 @@ async def _operacion(ctx, args, cargar_corrido=False, aprobacion=None):
                         raise GastoError("La propuesta cambió o no tiene la aprobación exacta. Volvé a revisar.")
                     c["_huella_aprobada"] = huella(lote_id)
                     recibo = estado.recibo(lote_id, c)
-                    if (configuracion.ante_error_borrador(c) and recibo and recibo.get("estado") == "cargado"
+                    if ((configuracion.ante_error_borrador(c) or getattr(ctx, "terminal", False))
+                            and recibo and recibo.get("estado") == "cargado"
                             and recibo.get("huella") == c["_huella_aprobada"]):
                         # Repetir el OK de una carga completa devuelve lo registrado: Administración puede haber
                         # confirmado una factura desde entonces, y volver a verificarla como borrador la daría por perdida.

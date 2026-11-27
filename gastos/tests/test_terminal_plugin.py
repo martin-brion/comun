@@ -41,9 +41,11 @@ class TerminalTests(presentacion.PresentacionTests):
         self.tecleado = None
 
     def escribir_propuesta(self, **cambios):
+        import hashlib
+        archivos = [{"nombre": p.name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+                    for p in sorted(self.carpeta.glob("*.jpg"))]
         with open(self.carpeta / "propuesta.json", "w", encoding="utf-8") as f:
-            json.dump({"archivos": ["01.jpg", "02.jpg", "03.jpg"], "comprobantes": self.rows, **cambios}, f,
-                      ensure_ascii=False)
+            json.dump({"archivos": archivos, "comprobantes": self.rows, **cambios}, f, ensure_ascii=False)
 
     def terminal(self, nombre="Ana Gomez"):
         prueba = self
@@ -162,15 +164,40 @@ class TerminalTests(presentacion.PresentacionTests):
 
     async def test_la_carpeta_cambiada_no_se_prepara(self):
         (self.carpeta / "01.jpg").rename(self.carpeta / "04.jpg")
+        self.escribir_propuesta(archivos=["01.jpg", "02.jpg", "03.jpg"])
         self.assertEqual(await self.correr(), 2)
         self.assertIn("la carpeta cambió", "\n".join(self.dicho))
         self.assertEqual(self.facturas(), [])
+
+    async def test_una_foto_cambiada_con_el_mismo_nombre(self):
+        (self.carpeta / "02.jpg").write_bytes(b"otra factura")
+        self.assertEqual(await self.correr(), 2)
+        self.assertIn("la carpeta cambió", "\n".join(self.dicho))
+
+    async def test_falta_la_lectura_de_una_foto_que_va(self):
+        leidas = json.loads((self.carpeta / "lecturas.json").read_text(encoding="utf-8"))
+        del leidas["02.jpg"]
+        (self.carpeta / "lecturas.json").write_text(json.dumps(leidas), encoding="utf-8")
+        self.assertEqual(await self.correr(), 2)
+        self.assertIn("Falta la lectura de 02.jpg (foto 2)", "\n".join(self.dicho))
+        leidas["02.jpg"] = None
+        (self.carpeta / "lecturas.json").write_text(json.dumps(leidas), encoding="utf-8")
+        self.dicho.clear()
+        self.tecleado = ""
+        self.assertEqual(await self.correr(), 1)            # null es «no se pudo leer»: prepara, sin OK no carga
+        self.assertIn("Propuesta:", "\n".join(self.dicho))
+
+    async def test_lote_nuevo_no_deja_colgada_una_carga(self):
+        self.teclear_la_huella()
+        self.assertEqual(await self.correr(), 0)
+        self.assertEqual(await self.correr(banderas=["--lote-nuevo"]), 1)
+        self.assertIn("tiene una carga empezada o hecha", "\n".join(self.dicho))
 
     async def test_una_lectura_que_no_es_un_objeto(self):
         with open(self.carpeta / "lecturas.json", "w", encoding="utf-8") as f:
             json.dump({"01.jpg": []}, f)
         self.assertEqual(await self.correr(), 2)
-        self.assertIn("La lectura de 01.jpg (foto 1) no es un objeto", "\n".join(self.dicho))
+        self.assertIn("La lectura de 01.jpg (foto 1) no es un objeto ni null", "\n".join(self.dicho))
 
     async def test_sin_nombre_no_corre(self):
         self.assertEqual(await self.correr(nombre=""), 2)
@@ -207,7 +234,7 @@ class TerminalTests(presentacion.PresentacionTests):
                 patch.object(importlib.import_module(g.__name__ + ".terminal"), "_numero_libre", return_value=True):
             rc = await self.correr()
         self.assertEqual(rc, 1, "\n".join(self.dicho))
-        self.assertIn("no creó esta carga", "\n".join(self.dicho))
+        self.assertIn("no puede reconocer como suya", "\n".join(self.dicho))
 
     async def test_lote_nuevo(self):
         self.teclear_la_huella()

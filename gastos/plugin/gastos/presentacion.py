@@ -131,8 +131,15 @@ def texto(d, tope=CUERPO_MAX - ENCABEZADO_MAX - 2):
                           + (f"\n…y {len(d['facturas']) - len(lineas)} más, sin nada que revisar: están en Odoo con el "
                              f"lote {d['lote_id']}." if len(lineas) < len(d["facturas"]) else ""))
         cuerpo = "\n\n".join(partes + cola)
-        if len(cuerpo) <= tope or len(lineas) <= len(primero):
-            return cuerpo[:tope]
+        if len(cuerpo) <= tope:
+            return cuerpo
+        if len(lineas) <= len(primero):
+            # Todas piden algo y no entran: se corta el listado de facturas, nunca lo que no entró ni los totales.
+            fin = "\n\n".join(cola)
+            lugar = max(0, tope - len(intro) - len(fin) - 60)
+            listado = partes[1][:lugar].rsplit("\n", 1)[0] if len(partes) > 1 else ""
+            return "\n\n".join(x for x in (intro, listado + f"\n…el resto está en Odoo con el lote {d['lote_id']}.", fin)
+                               if x)[:tope]
         lineas.pop()
 
 

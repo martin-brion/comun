@@ -9,9 +9,10 @@ fotos de --carpeta (jpg, jpeg, png o webp) se numeran por orden de nombre: foto 
 hace el agente de código:
 
 - las lecturas: {"<nombre del archivo>": lectura}, una por foto, con el esquema de fiscal.ESQUEMA;
-- la propuesta: {"archivos": [los nombres, en el orden de la carpeta], "comprobantes": [...], "excluir_fotos": [...]}, lo
-  que recibe gasto_preparar. «archivos» ata cada número de foto al archivo que el agente leyó: si la carpeta cambió, no se
-  prepara.
+- la propuesta: {"archivos": [{"nombre", "sha256"}, ... en el orden de la carpeta], "comprobantes": [...],
+  "excluir_fotos": [...]}, lo que recibe gasto_preparar. «archivos» ata cada número de foto a los bytes que el agente leyó:
+  si la carpeta cambió (otro orden, otro archivo o el mismo nombre con otro contenido), no se prepara. Cada foto que va en
+  un comprobante lleva su lectura; null es «no se pudo leer».
 
 El código hace lo determinista. Solo en el circuito de facturas, en un destino de factura estándar. La identidad es la de la
 persona, con sus credenciales del destino. El OK es teclear en la terminal los primeros 8 caracteres de la huella, después de
@@ -48,7 +49,8 @@ def _argumentos(argv):
     p.add_argument("--destino", default="")
     p.add_argument("--carpeta", required=True, help="las fotos del lote, numeradas por orden de nombre")
     p.add_argument("--lecturas", required=True, help='JSON {"<archivo>": lectura} con la lectura de cada foto')
-    p.add_argument("--propuesta", required=True, help='JSON {"archivos": [...], "comprobantes": [...], "excluir_fotos": [...]}')
+    p.add_argument("--propuesta", required=True,
+                   help='JSON {"archivos": [{"nombre", "sha256"}], "comprobantes": [...], "excluir_fotos": [...]}')
     p.add_argument("--salida", default="", help="carpeta donde queda el .eml de la presentación (por defecto, --carpeta)")
     p.add_argument("--lote-nuevo", action="store_true", help="descartar el lote local de este material y empezar otro")
     return p.parse_args(argv)
@@ -74,8 +76,14 @@ def archivos(carpeta):
     return salida
 
 
-def lecturas_de(lecturas, fotos, fiscal):
-    """{n: lectura normalizada} desde {"<archivo>": lectura}. Uso si una lectura no es un objeto o nombra otro archivo."""
+def huellas(fotos):
+    import hashlib
+    return [{"nombre": f.name, "sha256": hashlib.sha256(f.read_bytes()).hexdigest()} for f in fotos]
+
+
+def lecturas_de(lecturas, fotos, fiscal, usadas=()):
+    """{n: lectura normalizada} desde {"<archivo>": lectura}. Uso si una lectura no es un objeto ni null, si nombra otro
+    archivo o si falta la de una foto que va en un comprobante (`usadas`)."""
     if not isinstance(lecturas, dict):
         raise Uso('Las lecturas son un objeto {"<archivo>": lectura}')
     nombres = [f.name for f in fotos]
@@ -85,9 +93,13 @@ def lecturas_de(lecturas, fotos, fiscal):
     salida = {}
     for n, nombre in enumerate(nombres, 1):
         if nombre not in lecturas:
+            if n in usadas:
+                raise Uso(f"Falta la lectura de {nombre} (foto {n}), que va en un comprobante; si no se pudo leer, va null")
+            continue
+        if lecturas[nombre] is None:
             continue
         if not isinstance(lecturas[nombre], dict):
-            raise Uso(f"La lectura de {nombre} (foto {n}) no es un objeto")
+            raise Uso(f"La lectura de {nombre} (foto {n}) no es un objeto ni null")
         salida[n] = fiscal.normalizar(lecturas[nombre])
     return salida
 
@@ -110,15 +122,30 @@ def eml(presentacion, carpeta, lote_id):
     if carpeta.is_symlink():
         raise OSError("la carpeta de salida es un enlace")
     carpeta.mkdir(parents=True, exist_ok=True)
-    for i in range(1, 100):
-        ruta = carpeta / (f"{lote_id}.eml" if i == 1 else f"{lote_id}-{i}.eml")
-        try:
-            with open(ruta, "xb") as f:
-                f.write(bytes(m))
-            return ruta
-        except FileExistsError:
-            continue
-    raise OSError("ya hay demasiados borradores de este lote")
+    import os
+    import tempfile
+    fd, temporal = tempfile.mkstemp(prefix=f".{lote_id}.", suffix=".eml.tmp", dir=carpeta)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(bytes(m))
+            f.flush()
+            os.fsync(f.fileno())
+        for i in range(1, 100):
+            ruta = carpeta / (f"{lote_id}.eml" if i == 1 else f"{lote_id}-{i}.eml")
+            try:
+                os.link(temporal, ruta)           # recién completo, y sin pisar uno que ya está
+                return ruta
+            except FileExistsError:
+                continue
+        raise OSError("ya hay demasiados borradores de este lote")
+    finally:
+        Path(temporal).unlink(missing_ok=True)
+
+
+def _con_recibo(estado, lote_id):
+    """El lote tiene algún recibo, en cualquier empresa o destino (una carga empezada)."""
+    carpeta = estado.raiz(lote_id) / lote_id
+    return carpeta.is_dir() and any(carpeta.glob("*/*.recibo.json"))
 
 
 async def _numero_libre(g, ctx, c, lote_id):
@@ -153,16 +180,18 @@ async def cargar(t, argv, g):
     from . import configuracion, estado, fiscal, presentacion
     try:
         a = _argumentos(argv)
-        if t.ctx.user.name == t.ctx.user.login:
+        if not getattr(t.ctx.user, "nombre_declarado", True):
             raise Uso("Falta --nombre: el nombre de la persona va en la propuesta y en la presentación, como en el chat")
         fotos = archivos(a.carpeta)
         propuesta = _json(a.propuesta, "la propuesta")
         if not isinstance(propuesta, dict) or not isinstance(propuesta.get("comprobantes"), list):
             raise Uso('La propuesta es {"archivos": [...], "comprobantes": [...], "excluir_fotos": [...]}')
-        if propuesta.get("archivos") != [f.name for f in fotos]:
-            raise Uso("«archivos» de la propuesta no es la lista de fotos de la carpeta, en orden: la carpeta cambió desde "
-                      f"que se armó. Hoy es: {', '.join(f.name for f in fotos)}")
-        leidas = lecturas_de(_json(a.lecturas, "las lecturas"), fotos, fiscal)
+        if propuesta.get("archivos") != huellas(fotos):
+            raise Uso("«archivos» de la propuesta no es la lista de fotos de la carpeta, en orden y con su sha256: la "
+                      f"carpeta cambió desde que se armó. Hoy es: {json.dumps(huellas(fotos))}")
+        usadas = {n for x in propuesta["comprobantes"] if isinstance(x, dict)
+                  for n in (x.get("fotos") or [x.get("n")]) if type(n) is int}
+        leidas = lecturas_de(_json(a.lecturas, "las lecturas"), fotos, fiscal, usadas)
         cfg = configuracion.validar(config.config_funcion(g.FUNCION))
     except (Uso, configuracion.ConfigError) as exc:
         t.decir(f"error: {exc}")
@@ -182,7 +211,9 @@ async def cargar(t, argv, g):
     try:
         await t.vincular_erp(destino, empresa["destinos"][destino])
     except Exception as exc:                            # noqa: BLE001 - lo que diga Odoo, sin credenciales (bot.odoo)
-        t.decir(f"error: no pude entrar a Odoo con tus credenciales de {destino}: {exc}")
+        g.log.warning("gastos: la terminal no entró a Odoo (%s): %s", type(exc).__name__, t.ctx.tapar(exc)[:300])
+        motivo = "credenciales rechazadas" if "rechazadas" in str(exc) else "Odoo no respondió como se esperaba"
+        t.decir(f"error: no pude entrar a Odoo con tus credenciales de {destino}: {motivo}")
         return 2
     try:
         await _fotos_adjuntables(fotos)
@@ -194,6 +225,10 @@ async def cargar(t, argv, g):
     for intento in range(3):
         lote = t.lote_local("gastos", fotos)
         if a.lote_nuevo and intento == 0:
+            if estado.cargados([lote["lote_id"]]) or _con_recibo(estado, lote["lote_id"]):
+                t.decir(f"error: el lote {lote['lote_id']} tiene una carga empezada o hecha: --lote-nuevo lo dejaría sin "
+                        "poder retomarla. Para otro destino o empresa, copiá las fotos a otra carpeta.")
+                return 1
             store.set_extra(lote["id"], {**(lote.get("extra") or {}), "descartado": True})
             lote = t.lote_local("gastos", fotos)
         args["lote_id"] = lote["lote_id"]
@@ -254,7 +289,8 @@ async def cargar(t, argv, g):
         return 1
     if guardada.get("estado") == "lista":
         try:
-            ruta = eml(guardada, a.salida or a.carpeta, lote_id)
+            ruta = eml({**guardada, "asunto": t.ctx.tapar(guardada["asunto"]), "cuerpo": t.ctx.tapar(guardada["cuerpo"])},
+                       a.salida or a.carpeta, lote_id)
             t.decir(f"El mail que presenta el lote quedó en {ruta}, sin enviar: abrilo con tu cliente de correo, revisalo y "
                     "mandalo vos.")
         except OSError as exc:
