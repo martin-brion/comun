@@ -85,9 +85,33 @@ class Tapar(unittest.TestCase):
     def test_filtro(self):
         f = editar.filtro_tapar([{"x": 11, "y": 7, "w": 101, "h": 41, "desde": 12, "hasta": 15}], 10.0, "[0:v]", "[t]")
         self.assertIn("crop=102:42:10:6", f)
-        self.assertIn("between(t\\,2.000\\,5.000)", f)
+        self.assertIn("between(t\\,1.800\\,5.200)", f)   # el lapso con su holgura
         self.assertTrue(f.endswith("[t]"))
         self.assertEqual(editar.filtro_tapar([], 0, "[0:v]", "[t]"), "[0:v]null[t]")
+
+    def test_una_zona_mas_grande_que_el_cuadro_se_recorta(self):
+        self.assertEqual(editar.rectangulo({"x": 0, "y": 0, "w": 1920, "h": 40}, 1080, 1920), (0, 0, 1080, 40))
+        self.assertEqual(editar.rectangulo({"x": 1075, "y": 5, "w": 100, "h": 9}, 1080, 1920), (1074, 4, 6, 10))
+        self.assertIsNone(editar.rectangulo({"x": 2000, "y": 0, "w": 10, "h": 10}, 1080, 1920))
+        self.assertNotIn("crop", editar.filtro_tapar([{"x": 2000, "y": 0, "w": 9, "h": 9}], 0, "[0:v]", "[t]", 1080, 1920))
+
+
+class DatosReales(unittest.TestCase):
+    def test_una_escena_regrabada_sin_zona_en_su_toma_frena(self):
+        g = {"escenas": [{"id": "a", "superficie": "terminal", "tapar": [{"x": 0, "y": 0, "w": 9, "h": 9, "toma": 7}]},
+                         {"id": "b", "superficie": "terminal", "sin_datos": True},
+                         {"id": "c", "superficie": "filmacion"},
+                         {"id": "d", "superficie": "animacion"}]}
+        self.assertEqual(editar.escenas_sin_zona(g, {"a": 7, "b": 7}), ["c"])
+        self.assertEqual(editar.escenas_sin_zona(g, {"a": 8, "b": 8}), ["a", "c"])   # la a salió de la toma 8
+
+    def test_el_lapso_de_una_zona_tiene_holgura(self):
+        g = {"escenas": []}
+        e = {"tapar": [{"x": 0, "y": 0, "w": 9, "h": 9, "desde": 10, "hasta": 20}]}
+        self.assertEqual(len(editar.zonas_de(g, e, 1, 20.0, 25.0)), 1)   # empieza justo donde termina la zona
+        self.assertEqual(len(editar.zonas_de(g, e, 1, 9.9, 9.95)), 1)
+        f = editar.filtro_tapar(e["tapar"], 10.0, "[0:v]", "[t]")
+        self.assertIn("between(t\\," + f"{-editar.HOLGURA:.3f}" + "\\,", f)
 
 
 class Diseno(unittest.TestCase):
@@ -97,6 +121,13 @@ class Diseno(unittest.TestCase):
         pw, ph, px, py = editar.encaje(1080, 2228, editar.PC)     # un monitor vertical: entra por el alto
         self.assertEqual(ph, 864)
         self.assertEqual(px, (1920 - pw) // 2)
+
+    def test_dos_armados_a_la_vez_no_eligen_el_mismo_nombre(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            uno = editar.nombre_video(d, False, "261127", reservar=True)
+            dos = editar.nombre_video(d, True, "261127", reservar=True)
+            self.assertEqual((uno.name, dos.name), ("video_261127_v1.mp4", "video_261127_v2_interno.mp4"))
 
     def test_nombres_de_video(self):
         with tempfile.TemporaryDirectory() as d:
@@ -182,6 +213,8 @@ class Armado(unittest.TestCase):
                        check=True)
         subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
                         str(b / "voz" / "pedido.wav")], check=True)
+        subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=220:duration=40",
+                        "-ac", "2", str(cls.dir / "musica.mp3")], check=True)
         marcas = {"escenas": [{"id": "pedido", "t0": 0.0, "t1": 8.0}, {"id": "resultado", "t0": 8.0, "t1": 12.0}],
                   "tramos": [
                       {"escena": "pedido", "accion": "terminal.prompt", "tipo": "escribir", "t0": 0.2, "t1": 1.2,
@@ -192,14 +225,15 @@ class Armado(unittest.TestCase):
                       {"escena": "resultado", "accion": "pausa", "tipo": "pausa", "t0": 9.0, "t1": 11.0}]}
         (b / "toma_1.marcas.json").write_text(json.dumps(marcas), encoding="utf-8")
         guion = {"titulo": "Alta de prueba", "formato": "pc", "binarios": str(b), "datos_reales": True,
+                 "musica": str(cls.dir / "musica.mp3"),
                  "placas": {"inicio": {"titulo": "Alta de prueba"}, "fin": {"titulo": "Fin"}},
                  "escenas": [
                      {"id": "pedido", "superficie": "terminal", "texto": "Le pedís el alta",
                       "tapar": [{"x": 0, "y": 0, "w": 160, "h": 60}]},   # el reloj
-                     {"id": "resultado", "superficie": "escritorio", "texto": "Todo listo",
+                     {"id": "resultado", "superficie": "escritorio", "texto": "Todo listo", "sin_datos": True,
                       "recorte": {"x": 0, "y": 0, "w": 640, "h": 360}},
                      {"id": "pendrive", "superficie": "filmacion", "texto": "Se instala solo",
-                      "archivo": "filmacion/pc.mp4",
+                      "archivo": "filmacion/pc.mp4", "sin_datos": True,
                       "tramos": [{"desde": 0, "hasta": 2}, {"desde": 2, "hasta": 20, "vel": 9}]}]}
         cls.guion = cls.dir / "guion.yaml"
         import yaml
@@ -224,6 +258,10 @@ class Armado(unittest.TestCase):
         # la filmación: 2 s a velocidad real + 18 s a ×9 = 4 s
         self.assertAlmostEqual(tramos["pendrive"]["t1"] - tramos["pendrive"]["t0"], 4.0, delta=0.15)
         self.assertAlmostEqual(editar.duracion(dif), datos["escenas"][-1]["t1"], delta=0.3)
+        # la música sigue después de la última voz, hasta el final
+        audio = subprocess.run([entorno.ffmpeg("ffprobe"), "-v", "error", "-select_streams", "a:0", "-show_entries",
+                                "stream=duration", "-of", "default=nw=1:nk=1", str(dif)], capture_output=True, text=True)
+        self.assertAlmostEqual(float(audio.stdout.strip()), datos["escenas"][-1]["t1"], delta=0.5)
         # en la de difusión, la zona tapada tiene mucho menos detalle que en la interna
         t = (tramos["pedido"]["t0"] + 0.5)
         detalle = [self._detalle(v, t) for v in (dif, interno)]
@@ -238,6 +276,27 @@ class Armado(unittest.TestCase):
         otro.write_text(yaml.safe_dump(g, allow_unicode=True), encoding="utf-8")
         with self.assertRaises(SystemExit):
             editar.armar(otro, [1])
+
+    def test_un_nombre_grande_queda_ilegible(self):
+        from PIL import Image, ImageDraw, ImageFont
+        import numpy as np
+        img = Image.new("RGB", (1280, 720), "white")
+        try:
+            f = ImageFont.truetype("arialbd.ttf", 144)
+        except OSError:
+            f = ImageFont.load_default(144)
+        ImageDraw.Draw(img).text((100, 250), "ANA PRUEBA", font=f, fill="black")
+        antes = self.dir / "nombre.png"
+        despues = self.dir / "nombre_tapado.png"
+        img.save(antes)
+        filtro = editar.filtro_tapar([{"x": 80, "y": 230, "w": 1120, "h": 224}], 0, "[0:v]", "[t]", 1280, 720)
+        subprocess.run([_ffmpeg(), "-y", "-v", "error", "-i", str(antes), "-filter_complex", filtro, "-map", "[t]",
+                        str(despues)], check=True)
+
+        def bordes(p):
+            a = np.asarray(Image.open(p).convert("L"), dtype=float)[230:454, 80:1200]
+            return float(np.abs(np.diff(a, axis=1)).mean() + np.abs(np.diff(a, axis=0)).mean())
+        self.assertLess(bordes(despues), bordes(antes) * 0.2)
 
     def _detalle(self, video: Path, t: float) -> float:
         """Cuánto cambia la imagen de un píxel al de al lado sobre el reloj de la toma (la zona tapada)."""

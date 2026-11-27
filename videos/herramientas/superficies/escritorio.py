@@ -142,7 +142,8 @@ class Escritorio:
                 for flags in (0x0004, 0x0004 | 0x0002):   # KEYEVENTF_UNICODE, y al soltar KEYUP
                     i = INPUT(type=1)
                     i.ki = KEYBDINPUT(0, codigo, flags, 0, 0)
-                    u.SendInput(1, ctypes.byref(i), ctypes.sizeof(INPUT))
+                    if u.SendInput(1, ctypes.byref(i), ctypes.sizeof(INPUT)) != 1:
+                        raise RuntimeError("Windows no dejó escribir en la ventana con foco (¿es de administrador?)")
             time.sleep(pausa)
 
     @staticmethod

@@ -65,8 +65,9 @@ mezcla grupos se arma con un guion por grupo y los mismos binarios, o con escena
 | `animacion` (clip) | — | `archivo: <mp4 relativo a binarios>` · `segundos: <s>` (5): entra a lo ancho, con transición desde lo anterior y hacia lo que sigue |
 | `filmacion` (clip: un video filmado aparte, p. ej. con un celular) | — | `archivo: <relativo a binarios>` · `tramos: [{desde, hasta, vel}]` (segundos del archivo; `vel` 1 por defecto: 120 es un minuto en medio segundo) · o `desde`, `hasta`, `vel` sueltos · `recorte` y `tapar` en píxeles del archivo; `tapar` con `desde`/`hasta` en segundos del archivo |
 
-**Hitos.** Mientras el agente trabaja, cada vez que en el panel aparece por primera vez una de las expresiones de `hitos`,
-o la persona aprieta F8, queda un hito. La edición acelera el trabajo y congela un instante cada hito: así se lee el
+**Hitos.** Mientras el agente trabaja, cada vez que en el panel aparece una de las expresiones de `hitos` más veces que
+antes de mandar el prompt (lo que ya estaba en el historial no cuenta), o la persona aprieta F8, queda un hito. `leer`
+(2 s) es lo que la toma espera de verdad con el resultado quieto al terminar: es lo que la edición puede mostrar. La edición acelera el trabajo y congela un instante cada hito: así se lee el
 resultado de cada paso. Un hito que no apareció se avisa al terminar la toma.
 
 **Permisos del agente.** Si el agente pide confirmar algo, la toma espera a que alguien conteste en la terminal; ese
@@ -155,11 +156,19 @@ empieza y termina cada escena y cada voz). El mp4 nunca se edita a mano: un camb
 Un guion que muestra personas o datos reales lleva `datos_reales: true`. Entonces:
 
 - La persona que aparece da su consentimiento por escrito antes de la toma, y sabe qué versión se difunde.
-- `editar.py` arma por defecto la versión de **difusión**, con las zonas de `tapar` difuminadas, y frena si no hay
-  ninguna. La **interna**, sin difuminar, se pide con `--interno` y no sale de la empresa.
-- Las zonas se miden sobre la toma: `editar.py --muestras <n>` saca un cuadro por segundo con su segundo y su escena;
-  una zona es un rectángulo en píxeles de la toma, para todo el guion, una escena o un lapso (`desde`, `hasta`, en
-  segundos de esa toma; `toma` si vale para una sola).
-- Antes de difundir, la versión de difusión se revisa entera cuadro por cuadro: `editar.py --cuadros --cada 0.5`. Un
-  dato que se lee es un hallazgo: se suma una zona y se vuelve a armar.
+- `editar.py` arma por defecto la versión de **difusión**, con las zonas de `tapar` difuminadas, y frena si alguna
+  escena que sale de una toma o de una filmación no tiene ninguna zona que la alcance en la toma de la que sale. Una
+  escena que no muestra datos lo declara con `sin_datos: true`. La **interna**, sin difuminar, se pide con `--interno` y
+  no sale de la empresa.
+- Las zonas se miden sobre la toma: `editar.py --muestras <n>` saca un cuadro por segundo, con el segundo exacto de la
+  toma y su escena en el nombre; una zona es un rectángulo en píxeles de la toma (se agranda a pares y se recorta al
+  cuadro), para todo el guion, una escena o un lapso (`desde`, `hasta`, en segundos de esa toma, que la edición agranda
+  0,2 s de cada lado; `toma` si vale para una sola). El difuminado reduce la zona hasta que su lado corto queda en unos
+  3 píxeles: un texto del alto de la zona queda en manchas.
+- Las placas y las animaciones no se difuminan: muestran solo lo que escribe o trae quien arma el guion, y no llevan
+  datos de nadie.
+- Antes de difundir, la versión de difusión se revisa entera: `editar.py --cuadros --cada 0.2` (sin `--video`, toma el
+  último de difusión). Los tramos acelerados pasan rápido: un dato que se ve en un solo cuadro puede caer entre dos
+  muestras, así que las zonas de un tramo acelerado cubren el lapso entero. Un dato que se lee es un hallazgo: se suma
+  una zona y se vuelve a armar.
 - Claves, aunque sean iniciales, no aparecen en pantalla: el flujo no las imprime.

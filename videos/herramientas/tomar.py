@@ -127,7 +127,13 @@ def correr_paso(paso: dict, s: Superficies, m: Marcas, binarios: Path) -> None:
         (w or s.esc or a).captura(binarios / f"{arg}.png")
     # --- web ---
     elif accion == "web.ir":
-        w.ir(resolver_url(arg))
+        if isinstance(arg, dict):   # una dirección reservada: si el navegador falla, su error la nombraría
+            try:
+                w.ir(resolver_url(arg))
+            except Exception as e:
+                raise RuntimeError(f"web.ir falló con una dirección reservada ({type(e).__name__}; no se muestra)") from None
+        else:
+            w.ir(str(arg))
         m.tramo("carga", t0)
     elif accion == "web.tocar":
         w.tocar(arg)
@@ -146,7 +152,13 @@ def correr_paso(paso: dict, s: Superficies, m: Marcas, binarios: Path) -> None:
         m.tramo("accion", t0)
     # --- escritorio ---
     elif accion == "escritorio.abrir":        # una dirección o un archivo, con su aplicación; se espera que cargue
-        s.esc.abrir(resolver_url(arg) if isinstance(arg, dict) else str(arg))
+        if isinstance(arg, dict):
+            try:
+                s.esc.abrir(resolver_url(arg))
+            except Exception as e:
+                raise RuntimeError(f"escritorio.abrir falló con una dirección reservada ({type(e).__name__})") from None
+        else:
+            s.esc.abrir(str(arg))
         time.sleep(3)
         m.tramo("carga", t0)
     elif accion == "escritorio.tecla":        # «ctrl+l», «enter», «f5»

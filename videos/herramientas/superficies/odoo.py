@@ -49,8 +49,12 @@ def _cookie_android(dominio: str, sid: str | None) -> None:
     """Por DevTools del Chrome del emulador (adb forward al socket chrome_devtools_remote)."""
     sys.path.insert(0, str(AQUI))
     import android
-    android.adb("forward", "tcp:9222", "localabstract:chrome_devtools_remote")
-    _cookie_cdp(9222, dominio, sid)
+    # un puerto libre que elige adb, propio de este celular: con uno fijo, otro emulador podía quedarse con la cookie
+    puerto = int(str(android.adb("forward", "tcp:0", "localabstract:chrome_devtools_remote")).strip())
+    try:
+        _cookie_cdp(puerto, dominio, sid)
+    finally:
+        android.adb("forward", "--remove", f"tcp:{puerto}", check=False)
 
 
 def _cookie_web(dominio: str, sid: str | None) -> None:

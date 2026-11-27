@@ -71,11 +71,12 @@ class Terminal:
         self.correr = correr
         self.panel = resolver(self.cfg, correr)
         self.esc = esc
+        self._base: str | None = None   # lo que mostraba el panel antes de escribir: lo viejo no cuenta como resultado
 
     def estado(self) -> str:
         return str(self.correr("pane", "get", self.panel).get("pane", {}).get("agent_status", "unknown"))
 
-    def leer(self, lineas: int = 80) -> str:
+    def leer(self, lineas: int = 400) -> str:
         r = self.correr("pane", "read", self.panel, "--source", "recent-unwrapped", "--lines", str(lineas))
         return str(r.get("texto") or r.get("text") or r.get("read", {}).get("text", "") or "")
 
@@ -94,6 +95,8 @@ class Terminal:
     def escribir(self, texto, m=None) -> None:
         """De a pocas letras, para que se vea tipear (la edición lo lleva a `letras_s` parejo)."""
         texto = str(texto)
+        if self._base is None:
+            self._base = self.leer()
         t0 = m.ahora() if m else 0
         for i in range(0, len(texto), 3):
             self.correr("pane", "send-text", self.panel, texto[i:i + 3])
@@ -119,6 +122,7 @@ class Terminal:
         arg = arg if isinstance(arg, dict) else {"texto": arg}
         if self.estado() == "blocked":
             raise RuntimeError("el agente está esperando una respuesta: contestala antes de seguir")
+        self._base = self.leer()   # lo que ya estaba: un hito o un `hasta` cuenta solo si aparece de nuevo
         self.escribir(arg["texto"], m)
         self.enviar(None, m)
         self.esperar({**arg, "_recien_mandado": True}, m)
@@ -136,6 +140,12 @@ class Terminal:
         marcados: list[dict] = []
         pendientes = list(hitos)
         ultima_lectura = 0.0
+        base = self._base if self._base is not None else self.leer()
+        self._base = None
+
+        def nuevo(r: re.Pattern, texto: str) -> bool:
+            """Si `r` aparece más veces que antes de empezar (lo viejo del historial no cuenta)."""
+            return len(r.findall(texto)) > len(r.findall(base))
         while True:
             if time.monotonic() > fin:
                 raise TimeoutError(f"el agente no terminó en {maximo:.0f} s")
@@ -144,16 +154,17 @@ class Terminal:
                 while self.esc.apretada(TECLA_HITO):
                     time.sleep(0.05)
             ahora = time.monotonic()
+            texto = None
             if (pendientes or hasta) and ahora - ultima_lectura >= 1.0:
                 ultima_lectura = ahora
                 texto = self.leer()
                 for h in list(pendientes):
-                    if h.search(texto):
+                    if nuevo(h, texto):
                         marcados.append({"t": m.ahora(), "que": h.pattern})
                         pendientes.remove(h)
-                if hasta and hasta.search(texto):
-                    break
             estado = self.estado()
+            if hasta and texto is not None and estado != "blocked" and nuevo(hasta, texto):
+                break
             if estado in ("working", "blocked"):
                 visto_trabajando = True
             elif estado in FIN and not hasta:
@@ -166,8 +177,9 @@ class Terminal:
         if arg.get("comprimir_a") is not None:
             extra["comprimir_a"] = float(arg["comprimir_a"])
         m.tramo("trabajo", t0, t1, **extra)
-        time.sleep(0.6)   # que la pantalla termine de dibujar el final
-        m.tramo("lectura", t1, None, **({"leer": float(arg["leer"])} if arg.get("leer") is not None else {}))
+        leer = float(arg.get("leer", 2.0))
+        time.sleep(max(0.6, leer))   # la pantalla quieta con el resultado: lo que dura de verdad es lo que se puede mostrar
+        m.tramo("lectura", t1, None, leer=leer)
         if pendientes:
             print(f"  (no aparecieron: {', '.join(h.pattern for h in pendientes)})")
 

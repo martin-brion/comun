@@ -103,7 +103,8 @@ def _reservado(cmd: str, valor: str) -> None:
         raise RuntimeError("adb: falló un comando con un valor reservado (no se muestra)")
 
 
-FIRMADO = re.compile(r"(/t/)[A-Za-z0-9._~%-]{8,}")   # los enlaces de los tableros (/t/<firma>)
+FIRMADO = re.compile(r"(/t/|[?&#](?:sig|signature|firma|token|t|k|key|code|auth)=)[A-Za-z0-9._~%+/=-]{6,}", re.I)
+# un enlace firmado: /t/<firma> o un parámetro de firma; al mirar la pantalla se imprime sin ella
 
 
 @dataclass
@@ -137,6 +138,7 @@ class Android:
             salida = shell("uiautomator dump /sdcard/v.xml", check=False, timeout=30)
             if "dumped" in salida:
                 xml = adb("exec-out", "cat", "/sdcard/v.xml", binario=True)
+                shell("rm -f /sdcard/v.xml", check=False)   # trae los textos de la pantalla, enlaces firmados incluidos
                 try:
                     raiz = ET.fromstring(xml)
                 except ET.ParseError:

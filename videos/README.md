@@ -68,7 +68,7 @@ los datos del flujo que se muestra (el guion solo los nombra).
   que vea esta persona?».
 - **Paso 2, humano:** OK antes de crear algo en un sistema de verdad (una cuenta, una base, una dirección).
 - **Paso 5, humano:** mira el video entero contra el texto de cada escena; los cambios van al guion. Con datos reales,
-  además revisa la versión de difusión cuadro por cuadro (`--cuadros --cada 0.5`) y ningún dato se lee.
+  además revisa la versión de difusión cuadro por cuadro (`--cuadros --cada 0.2`) y ningún dato se lee.
 - **Paso 6, humano:** escucha el video con voz entero.
 - Pasos 3, 4 y 7: ninguno (la toma la juzga el paso 5; la entrega solo ordena).
 

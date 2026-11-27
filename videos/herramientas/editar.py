@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(os.environ.get("VIDEOS_SUPERFICIES", AQUI / "superfi
 import entorno  # noqa: E402
 
 FPS = 30
+_ffmpeg = entorno.ffmpeg   # nombre viejo, para los scripts de una instancia que lo usan
 DEFECTO = {
     "letras_s": 15.0, "vel_escribir": 2.0, "espera_max": 3.0, "carga_max": 0.5, "vel_respuesta": 2.0, "leer": 2.0,
     "accion_max": 2.5, "hueco_max": 0.5, "placa_inicio": 2.5, "placa_fin": 3.0,
@@ -60,6 +61,7 @@ SUPERPUESTOS = {"celular": {"pantalla_h": 1730, "banda_h": 0}, "pc": {"pantalla_
 # corta arriba del cartel y se completa con blanco, el fondo de Element X.
 ALTO_UTIL, CORTE_TECLADO = 2336, 2222
 DE_CLIP = {"animacion", "filmacion"}
+HOLGURA = 0.2   # segundos de más a cada lado del lapso de una zona a difuminar
 AUDIOS = (".wav", ".m4a", ".mp3", ".ogg", ".flac")
 
 
@@ -197,7 +199,7 @@ def _texto_centrado(d: ImageDraw.ImageDraw, w: int, y: int, texto: str, fuente, 
     return y
 
 
-def fondo_escena(m: Marca, texto: str, destino: Path, c: dict) -> None:
+def fondo_escena(m: Marca, texto: str, destino: Path, c: dict = CELULAR) -> None:
     """El fondo de una escena: el logo arriba y, si el diseño tiene banda, el texto abajo de la pantalla."""
     img = Image.new("RGB", (c["w"], c["h"]), m.fondo)
     d = ImageDraw.Draw(img)
@@ -251,7 +253,7 @@ def _logo_con(con: dict, base: Path) -> Image.Image | None:
     return im.resize((ancho, round(im.height * ancho / im.width)), Image.LANCZOS)
 
 
-def placa(m: Marca, titulo: str, subtitulo: str, destino: Path, c: dict, con: dict | None = None,
+def placa(m: Marca, titulo: str, subtitulo: str, destino: Path, c: dict = CELULAR, con: dict | None = None,
           base: Path = Path(".")) -> None:
     """La placa con el logo. `con` suma otra marca: arriba, unida con «×» (`posicion: arriba`), o abajo como firma."""
     img = Image.new("RGB", (c["w"], c["h"]), m.fondo)
@@ -354,32 +356,73 @@ def zonas_de(guion: dict, escena: dict, toma: int | None, s0: float, s1: float) 
     for z in list(guion.get("tapar") or []) + list(escena.get("tapar") or []):
         if toma is not None and z.get("toma") is not None and int(z["toma"]) != toma:
             continue
-        desde, hasta = float(z.get("desde", -1e9)), float(z.get("hasta", 1e9))
-        if hasta <= s0 or desde >= s1:
+        desde, hasta = float(z.get("desde", -1e9)) - HOLGURA, float(z.get("hasta", 1e9)) + HOLGURA
+        if hasta < s0 or desde > s1:
             continue
         zonas.append(z)
     return zonas
 
 
-def filtro_tapar(zonas: list[dict], s0: float, entrada: str, salida: str) -> str:
-    """Filtro de ffmpeg que difumina cada zona (x, y, w, h en píxeles de la toma) hasta que no se lea: la reduce a un
-    doceavo y la vuelve a agrandar. El tiempo `t` del filtro empieza en s0 de la toma."""
-    if not zonas:
-        return f"{entrada}null{salida}"
-    partes, actual = [], entrada
-    for i, z in enumerate(zonas):
-        x, y = int(z["x"]) // 2 * 2, int(z["y"]) // 2 * 2   # la zona se agranda hasta pares: tapa de más, nunca de menos
-        w, h = -(-(int(z["x"]) + int(z["w"]) - x) // 2) * 2, -(-(int(z["y"]) + int(z["h"]) - y) // 2) * 2
+def escenas_sin_zona(guion: dict, duenia: dict[str, int]) -> list[str]:
+    """Con datos reales: las escenas que salen de una toma o de una filmación y no tienen ninguna zona que las alcance
+    (en la toma de la que salen), salvo que digan `sin_datos: true`."""
+    faltan = []
+    for e in guion["escenas"]:
+        if e.get("sin_datos") or e.get("superficie") == "animacion":
+            continue
+        if e.get("superficie") == "filmacion":
+            toma = None
+        elif e["id"] in duenia:
+            toma = duenia[e["id"]]
+        else:
+            continue   # no está en estas tomas
+        if not zonas_de(guion, e, toma, -1e9, 1e9):
+            faltan.append(e["id"])
+    return faltan
+
+
+def rectangulo(z: dict, ancho: int | None = None, alto: int | None = None) -> tuple[int, int, int, int] | None:
+    """Un rectángulo del guion en píxeles pares (se agranda: tapa de más, nunca de menos), recortado al cuadro de
+    ancho×alto. None si queda afuera."""
+    x0, y0 = max(0, int(z["x"])), max(0, int(z["y"]))
+    x1, y1 = int(z["x"]) + int(z["w"]), int(z["y"]) + int(z["h"])
+    if ancho is not None:
+        x1 = min(x1, ancho)
+    if alto is not None:
+        y1 = min(y1, alto)
+    x, y = x0 // 2 * 2, y0 // 2 * 2
+    w, h = -(-(x1 - x) // 2) * 2, -(-(y1 - y) // 2) * 2
+    if ancho is not None and x + w > ancho:
+        w = (ancho - x) // 2 * 2
+    if alto is not None and y + h > alto:
+        h = (alto - y) // 2 * 2
+    return (x, y, w, h) if w >= 2 and h >= 2 else None
+
+
+def filtro_tapar(zonas: list[dict], s0: float, entrada: str, salida: str, ancho: int | None = None,
+                 alto: int | None = None) -> str:
+    """Filtro de ffmpeg que difumina cada zona (x, y, w, h en píxeles de la toma, recortada a ancho×alto) hasta que no
+    se lea: la reduce hasta que su lado corto queda en unos 3 píxeles (al menos a un doceavo) y la vuelve a agrandar;
+    un texto del alto de la zona queda en manchas. El tiempo `t` del filtro empieza en s0 de la toma; el lapso de una
+    zona se agranda HOLGURA de cada lado, para que el primer cuadro de un corte no quede afuera."""
+    partes, actual, i = [], entrada, 0
+    for z in zonas:
+        r = rectangulo(z, ancho, alto)
+        if r is None:
+            continue
+        x, y, w, h = r
+        i += 1
         cuando = ""
         if z.get("desde") is not None or z.get("hasta") is not None:
-            a = float(z.get("desde", -1e9)) - s0
-            b = float(z.get("hasta", 1e9)) - s0
+            a = float(z.get("desde", -1e9)) - s0 - HOLGURA
+            b = float(z.get("hasta", 1e9)) - s0 + HOLGURA
             cuando = f":enable='between(t\\,{a:.3f}\\,{b:.3f})'"
-        partes.append(f"{actual}split[tb{i}][tz{i}];[tz{i}]crop={w}:{h}:{x}:{y},scale={max(2, w // 12)}:"
-                      f"{max(2, h // 12)}:flags=area,scale={w}:{h}:flags=bicubic[tf{i}];"
+        factor = max(12, min(w, h) // 3)
+        partes.append(f"{actual}split[tb{i}][tz{i}];[tz{i}]crop={w}:{h}:{x}:{y},scale={max(2, w // factor)}:"
+                      f"{max(2, h // factor)}:flags=area,scale={w}:{h}:flags=bicubic[tf{i}];"
                       f"[tb{i}][tf{i}]overlay={x}:{y}{cuando}[to{i}]")
         actual = f"[to{i}]"
-    return ";".join(partes) + f";{actual}null{salida}"
+    return ";".join(partes + [f"{actual}null{salida}"])
 
 
 def encaje(sw: int, sh: int, c: dict) -> tuple[int, int, int, int]:
@@ -476,11 +519,13 @@ def filtro_audio(voces: list[tuple[int, float]], con_musica: bool, largo: float,
     else:
         partes.append("".join(f"[v{j}]" for j in range(len(voces))) +
                       f"amix=inputs={len(voces)}:normalize=0:duration=longest[voz]")
+    partes[-1] = partes[-1][:-len("[voz]")] + "[vc]"
+    partes.append(f"[vc]apad=whole_dur={largo:.3f}[voz]")   # hasta el final: si no, la música se corta con la última voz
     if con_musica:
         partes.append("[voz]asplit=2[vz1][vz2];[a][vz1]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400"
                       "[md];[md][vz2]amix=inputs=2:normalize=0:duration=first[sal]")
     else:
-        partes.append(f"[voz]apad=whole_dur={largo:.3f}[sal]")
+        partes.append("[voz]anull[sal]")
     return ";".join(partes)
 
 
@@ -494,10 +539,22 @@ def voz_de(binarios: Path, escena: str) -> Path | None:
 
 # --- armado -------------------------------------------------------------------------------------------------------
 
-def nombre_video(binarios: Path, interno: bool, hoy: str) -> Path:
+def nombre_video(binarios: Path, interno: bool, hoy: str, reservar: bool = False) -> Path:
+    """El próximo `video_<hoy>_v<k>[_interno].mp4`. Con `reservar`, lo toma creando su `.escenas.json` vacío: dos
+    armados a la vez no eligen el mismo nombre."""
     patron = re.compile(rf"video_{hoy}_v(\d+)(_interno)?$")
-    hechos = [int(mt.group(1)) for p in binarios.glob(f"video_{hoy}_v*.mp4") if (mt := patron.match(p.stem))]
-    return binarios / f"video_{hoy}_v{max(hechos, default=0) + 1}{'_interno' if interno else ''}.mp4"
+    while True:
+        hechos = [int(mt.group(1)) for p in list(binarios.glob(f"video_{hoy}_v*.mp4")) +
+                  [q.with_suffix("") for q in binarios.glob(f"video_{hoy}_v*.escenas.json")]
+                  if (mt := patron.match(p.stem))]
+        final = binarios / f"video_{hoy}_v{max(hechos, default=0) + 1}{'_interno' if interno else ''}.mp4"
+        if not reservar:
+            return final
+        try:
+            with open(final.with_suffix(".escenas.json"), "x", encoding="utf-8"):
+                return final
+        except FileExistsError:
+            continue
 
 
 def armar(guion_ruta: Path, tomas: list[int], interno: bool = False, con_voz: bool = True) -> Path:
@@ -507,218 +564,231 @@ def armar(guion_ruta: Path, tomas: list[int], interno: bool = False, con_voz: bo
     formato = guion.get("formato", "celular")
     if formato not in DISENO:
         raise SystemExit(f"formato desconocido «{formato}»: celular o pc (CONTRATO.md)")
-    hay_zonas = bool(guion.get("tapar")) or any(e.get("tapar") for e in guion["escenas"])
-    if guion.get("datos_reales") and not interno and not hay_zonas:
-        raise SystemExit("el guion tiene `datos_reales: true` y ninguna zona en `tapar`: la versión de difusión "
-                         "mostraría los datos. Medí las zonas (--muestras) o armá la interna (--interno)")
     aj = {**DEFECTO, **(guion.get("edicion") or {})}
     binarios = Path(os.path.expandvars(guion["binarios"]))
     base = base_de(guion_ruta)
     marcas = {n: json.loads((binarios / f"toma_{n}.marcas.json").read_text(encoding="utf-8")) for n in tomas}
     duenia = {e["id"]: n for n in tomas for e in marcas[n]["escenas"]}
+    if guion.get("datos_reales") and not interno:
+        faltan = escenas_sin_zona(guion, duenia)
+        if faltan:
+            raise SystemExit(f"`datos_reales: true` y estas escenas no tienen ninguna zona en `tapar` que las alcance en "
+                             f"su toma: {', '.join(faltan)}. Medí las zonas (--muestras), declará `sin_datos: true` en "
+                             "la escena que no muestra datos, o armá la interna (--interno)")
     m = Marca(ruta_relativa(guion.get("marca"), base, guion_ruta) if guion.get("marca") else None)
-    trabajo = binarios / f"_trabajo_toma_{'_'.join(map(str, tomas)) or 'sin'}{'_interno' if interno else ''}"
-    trabajo.mkdir(exist_ok=True)
-    ff = entorno.ffmpeg()
-    subtitulos = guion.get("subtitulos", "abajo")
-    if subtitulos not in ("abajo", "superpuestos"):
-        raise SystemExit(f"subtitulos: «{subtitulos}» no existe: abajo o superpuestos (CONTRATO.md)")
-    c = {**DISENO[formato], **(SUPERPUESTOS[formato] if subtitulos == "superpuestos" else {})}
-    por_id = {e["id"]: e for e in guion["escenas"]}
+    final = nombre_video(binarios, interno, date.today().strftime("%y%m%d"), reservar=True)
+    try:
+        trabajo = binarios / f"_trabajo_{final.stem}"
+        trabajo.mkdir(exist_ok=True)
+        ff = entorno.ffmpeg()
+        subtitulos = guion.get("subtitulos", "abajo")
+        if subtitulos not in ("abajo", "superpuestos"):
+            raise SystemExit(f"subtitulos: «{subtitulos}» no existe: abajo o superpuestos (CONTRATO.md)")
+        c = {**DISENO[formato], **(SUPERPUESTOS[formato] if subtitulos == "superpuestos" else {})}
+        por_id = {e["id"]: e for e in guion["escenas"]}
 
-    # 1. cada toma a 30 cuadros fijos (scrcpy y el navegador solo mandan cuadros cuando la pantalla cambia)
-    cfr: dict[int, Path] = {}
-    medida: dict[int, tuple[int, int]] = {}
-    for n in tomas:
-        toma, cfr[n] = binarios / f"toma_{n}.mkv", binarios / f"_trabajo_toma_{n}" / "cfr.mp4"
-        cfr[n].parent.mkdir(exist_ok=True)
-        if not cfr[n].exists() or cfr[n].stat().st_mtime < toma.stat().st_mtime:
-            correr([ff, "-y", "-i", str(toma), "-vf", f"fps={FPS},tpad=stop_mode=clone:stop_duration=30",
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-an", str(cfr[n])])
-        medida[n] = tamano(cfr[n])
+        # 1. cada toma a 30 cuadros fijos (scrcpy y el navegador solo mandan cuadros cuando la pantalla cambia)
+        cfr: dict[int, Path] = {}
+        medida: dict[int, tuple[int, int]] = {}
+        for n in tomas:
+            toma, cfr[n] = binarios / f"toma_{n}.mkv", binarios / f"_trabajo_toma_{n}" / "cfr.mp4"
+            cfr[n].parent.mkdir(exist_ok=True)
+            if not cfr[n].exists() or cfr[n].stat().st_mtime < toma.stat().st_mtime:
+                correr([ff, "-y", "-i", str(toma), "-vf", f"fps={FPS},tpad=stop_mode=clone:stop_duration=30",
+                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-an", str(cfr[n])])
+            medida[n] = tamano(cfr[n])
 
-    # 2. dibujos: fondo y capa de texto por escena
-    for e in guion["escenas"]:
-        texto = e.get("texto", "")
-        fondo_escena(m, texto, trabajo / f"fondo_{e['id']}.png", c)
-        capa_texto(m, texto if subtitulos == "superpuestos" else "", trabajo / f"capa_{e['id']}.png", c,
-                   e.get("texto_posicion", "abajo"))
+        # 2. dibujos: fondo y capa de texto por escena
+        for e in guion["escenas"]:
+            texto = e.get("texto", "")
+            fondo_escena(m, texto, trabajo / f"fondo_{e['id']}.png", c)
+            capa_texto(m, texto if subtitulos == "superpuestos" else "", trabajo / f"capa_{e['id']}.png", c,
+                       e.get("texto_posicion", "abajo"))
 
-    def la_mascara(pw: int, ph: int) -> Path:
-        ruta = trabajo / f"mascara_{pw}x{ph}.png"
-        if not ruta.exists():
-            mascara(ruta, pw, ph, c["radio"])
-        return ruta
+        def la_mascara(pw: int, ph: int) -> Path:
+            ruta = trabajo / f"mascara_{pw}x{ph}.png"
+            if not ruta.exists():
+                mascara(ruta, pw, ph, c["radio"])
+            return ruta
 
-    def geometria(e: dict, sw: int, sh: int, celular_emulado: bool) -> tuple[str, tuple[int, int, int, int]]:
-        """El recorte de la fuente (filtro) y dónde va en el video."""
-        if e.get("recorte"):
-            r = e["recorte"]
-            x, y, w, h = int(r["x"]) // 2 * 2, int(r["y"]) // 2 * 2, par(r["w"]), par(r["h"])
-            return f"crop={w}:{h}:{x}:{y}", encaje(w, h, c)
-        if celular_emulado:
-            return f"crop=1080:{ALTO_UTIL}:0:0", encaje(1080, ALTO_UTIL, c)
-        return "null", encaje(sw, sh, c)
+        def geometria(e: dict, sw: int, sh: int, celular_emulado: bool) -> tuple[str, tuple[int, int, int, int]]:
+            """El recorte de la fuente (filtro) y dónde va en el video."""
+            if e.get("recorte"):
+                r = rectangulo(e["recorte"], sw, sh)
+                if r is None:
+                    raise SystemExit(f"escena «{e['id']}»: el recorte queda fuera de la toma ({sw}×{sh})")
+                x, y, w, h = r
+                return f"crop={w}:{h}:{x}:{y}", encaje(w, h, c)
+            if celular_emulado:
+                return f"crop=1080:{ALTO_UTIL}:0:0", encaje(1080, ALTO_UTIL, c)
+            return "null", encaje(sw, sh, c)
 
-    def componer(fuente: str, e_id: str, pw: int, ph: int, px: int, py: int) -> str:
-        """De [fuente] (la pantalla ya recortada y a su velocidad) al cuadro del video, sobre el fondo de la escena."""
-        return (f"{fuente}scale={pw}:{ph},format=rgba[p];[2:v]format=gray,scale={pw}:{ph}[k];[p][k]alphamerge[r];"
-                f"[1:v][r]overlay={px}:{py}[f];[f][3:v]overlay=0:0,fps={FPS},format=yuv420p")
+        def componer(fuente: str, e_id: str, pw: int, ph: int, px: int, py: int) -> str:
+            """De [fuente] (la pantalla ya recortada y a su velocidad) al cuadro del video, sobre el fondo de la escena."""
+            return (f"{fuente}scale={pw}:{ph},format=rgba[p];[2:v]format=gray,scale={pw}:{ph}[k];[p][k]alphamerge[r];"
+                    f"[1:v][r]overlay={px}:{py}[f];[f][3:v]overlay=0:0,fps={FPS},format=yuv420p")
 
-    # 3. los clips de cada escena: los segmentos de la toma y las filmaciones
-    clips: dict[str, list[tuple[Path, float]]] = {}
-    orden = {e["id"]: i for i, e in enumerate(guion["escenas"])}
-    segs = [{**s, "toma": n} for n in tomas for s in segmentos(marcas[n], aj) if duenia.get(s["escena"]) == n]
-    segs.sort(key=lambda s: orden.get(s["escena"], len(orden)))   # estable: dentro de una escena, el orden de la toma
-    for i, s in enumerate(segs):
-        e = por_id.get(s["escena"], {"id": s["escena"]})
-        congelar = s.get("congelar")
-        dur_out = float(congelar) if congelar else (s["s1"] - s["s0"]) / s["vel"]
-        if dur_out < 1 / FPS:
-            continue
-        sw, sh = medida[s["toma"]]
-        emulado = formato == "celular" and e.get("superficie", "android") == "android"
-        recorte, (pw, ph, px, py) = geometria(e, sw, sh, emulado)
-        if emulado and not e.get("recorte") and con_teclado(ff, cfr[s["toma"]], s["s0"], max(s["s0"], s["s1"])):
-            recorte = f"crop=1080:{CORTE_TECLADO}:0:0,pad=1080:{ALTO_UTIL}:0:0:color=white"
-        zonas = [] if interno else zonas_de(guion, e, s["toma"], s["s0"], max(s["s1"], s["s0"] + 0.05))
-        tiempo = ("trim=end_frame=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=" + f"{dur_out:.3f}"
-                  if congelar else f"setpts=(PTS-STARTPTS)/{s['vel']:.4f}")
-        filtro = (filtro_tapar(zonas, s["s0"], "[0:v]", "[t]") + f";[t]{recorte},{tiempo}[s];" +
-                  componer("[s]", e["id"], pw, ph, px, py))
-        out = trabajo / f"s_{i:03d}.mp4"
-        entrada = ["-ss", f"{s['s0']:.3f}", *([] if congelar else ["-to", f"{s['s1']:.3f}"]), "-i", str(cfr[s["toma"]])]
-        correr([ff, "-y", *entrada,
-                "-loop", "1", "-i", str(trabajo / f"fondo_{e['id']}.png"),
-                "-loop", "1", "-i", str(la_mascara(pw, ph)),
-                "-loop", "1", "-i", str(trabajo / f"capa_{e['id']}.png"),
-                "-filter_complex", filtro, "-t", f"{dur_out:.3f}",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", str(out)])
-        clips.setdefault(s["escena"], []).append((out, dur_out))
-
-    for e in guion["escenas"]:
-        if e.get("superficie") == "filmacion":
-            clips[e["id"]] = [clip_filmacion(e, guion, binarios, trabajo, c, aj, interno, geometria, componer,
-                                             la_mascara)]
-
-    # 4. en el orden del guion: placas, clips, animaciones y, donde haya voz, lo que haga falta para que entre
-    piezas: list[Path] = []
-    tiempos: list[dict] = []
-    voces: list[tuple[Path, float]] = []
-    t_salida = 0.0
-
-    def sumar(archivo: Path, dur: float, escena: str) -> None:
-        nonlocal t_salida
-        piezas.append(archivo)
-        if tiempos and tiempos[-1]["escena"] == escena:
-            tiempos[-1]["t1"] = round(t_salida + dur, 2)
-        else:
-            tiempos.append({"escena": escena, "t0": round(t_salida, 2), "t1": round(t_salida + dur, 2)})
-        t_salida += dur
-
-    def cuadro(video: Path, destino: Path, ultimo: bool) -> Path:
-        correr([ff, "-y", *(["-sseof", "-0.1"] if ultimo else []), "-i", str(video), "-frames:v", "1", str(destino)])
-        return destino
-
-    def quieto(png: Path, dur: float, destino: Path, fundido: bool = False) -> Path:
-        fades = f",fade=t=in:st=0:d=0.4,fade=t=out:st={dur - 0.4:.3f}:d=0.4" if fundido else ""
-        correr([ff, "-y", "-loop", "1", "-i", str(png), "-t", f"{dur:.3f}", "-vf", f"fps={FPS}{fades},format=yuv420p",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", str(destino)])
-        return destino
-
-    def con_voz_de(escena: str, t0: float) -> float:
-        """La voz de la escena, si hay: anotada para la mezcla; devuelve cuánto tiene que durar la escena como mínimo."""
-        if not con_voz:
-            return 0.0
-        v = voz_de(binarios, escena)
-        if v is None:
-            return 0.0
-        voces.append((v, t0 + aj["voz_retardo"]))
-        return duracion(v) + aj["voz_retardo"] + aj["voz_margen"]
-
-    pl = guion.get("placas") or {}
-
-    def clip_placa(clave: str, dur: float) -> None:
-        datos = pl.get(clave)
-        if not datos:
-            return
-        dur = max(dur, con_voz_de(f"placa_{clave}", t_salida))
-        png = trabajo / f"placa_{clave}.png"
-        placa(m, datos.get("titulo", ""), datos.get("subtitulo", ""), png, c, datos.get("con"), base)
-        sumar(quieto(png, dur, trabajo / f"p_{clave}.mp4", fundido=True), dur, f"placa_{clave}")
-
-    def clip_animacion(e: dict, hacia: Path | None) -> tuple[Path, float]:
-        dur, tr = float(e.get("segundos", 5)), float(aj["transicion_s"])
-        desde = cuadro(piezas[-1], trabajo / f"a_{e['id']}_desde.png", True)
-        q = f"fps={FPS},format=yuv420p,settb=AVTB"
-        py = c["pantalla_y"]
-        entradas = ["-loop", "1", "-t", f"{tr}", "-i", str(desde),
+        # 3. los clips de cada escena: los segmentos de la toma y las filmaciones
+        clips: dict[str, list[tuple[Path, float]]] = {}
+        orden = {e["id"]: i for i, e in enumerate(guion["escenas"])}
+        segs = [{**s, "toma": n} for n in tomas for s in segmentos(marcas[n], aj) if duenia.get(s["escena"]) == n]
+        segs.sort(key=lambda s: orden.get(s["escena"], len(orden)))   # estable: dentro de una escena, el orden de la toma
+        for i, s in enumerate(segs):
+            e = por_id.get(s["escena"], {"id": s["escena"]})
+            congelar = s.get("congelar")
+            dur_out = float(congelar) if congelar else (s["s1"] - s["s0"]) / s["vel"]
+            if dur_out < 1 / FPS:
+                continue
+            sw, sh = medida[s["toma"]]
+            emulado = formato == "celular" and e.get("superficie", "android") == "android"
+            recorte, (pw, ph, px, py) = geometria(e, sw, sh, emulado)
+            if emulado and not e.get("recorte") and con_teclado(ff, cfr[s["toma"]], s["s0"], max(s["s0"], s["s1"])):
+                recorte = f"crop=1080:{CORTE_TECLADO}:0:0,pad=1080:{ALTO_UTIL}:0:0:color=white"
+            zonas = [] if interno else zonas_de(guion, e, s["toma"], s["s0"], max(s["s1"], s["s0"] + 0.05))
+            tiempo = ("trim=end_frame=1,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=" + f"{dur_out:.3f}"
+                      if congelar else f"setpts=(PTS-STARTPTS)/{s['vel']:.4f}")
+            filtro = (filtro_tapar(zonas, s["s0"], "[0:v]", "[t]", sw, sh) + f";[t]{recorte},{tiempo}[s];" +
+                      componer("[s]", e["id"], pw, ph, px, py))
+            out = trabajo / f"s_{i:03d}.mp4"
+            entrada = ["-ss", f"{s['s0']:.3f}", *([] if congelar else ["-to", f"{s['s1']:.3f}"]), "-i", str(cfr[s["toma"]])]
+            correr([ff, "-y", *entrada,
                     "-loop", "1", "-i", str(trabajo / f"fondo_{e['id']}.png"),
-                    "-stream_loop", "-1", "-i", str(binarios / e["archivo"]),
-                    "-loop", "1", "-i", str(trabajo / f"capa_{e['id']}.png")]
-        filtro = (f"[2:v]scale={c['w'] - 80}:-2,setpts=PTS-STARTPTS[an];"
-                  f"[1:v][an]overlay=(W-w)/2:{py}+({c['pantalla_h']}-h)/2[fa];[fa][3:v]overlay=0:0,"
-                  f"trim=duration={dur},setpts=PTS-STARTPTS,{q}[b];[0:v]{q}[a];"
-                  f"[a][b]xfade=transition={aj['transicion']}:duration={tr}:offset=0")
-        if hacia is not None:
-            entradas += ["-loop", "1", "-t", f"{tr}", "-i", str(hacia)]
-            filtro += f"[ab];[4:v]{q}[c];[ab][c]xfade=transition={aj['transicion']}:duration={tr}:offset={dur - tr}"
-        out = trabajo / f"a_{e['id']}.mp4"
-        # yuv420p explícito: si no, sale en 4:4:4 y, pegado sin recodificar, muchos reproductores cortan ahí
-        correr([ff, "-y", *entradas, "-filter_complex", filtro, "-t", f"{dur}",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", str(out)])
-        return out, dur
+                    "-loop", "1", "-i", str(la_mascara(pw, ph)),
+                    "-loop", "1", "-i", str(trabajo / f"capa_{e['id']}.png"),
+                    "-filter_complex", filtro, "-t", f"{dur_out:.3f}",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", str(out)])
+            clips.setdefault(s["escena"], []).append((out, dur_out))
 
-    clip_placa("inicio", aj["placa_inicio"])
-    escenas = guion["escenas"]
-    for k, e in enumerate(escenas):
-        t0 = t_salida
-        if e.get("superficie") == "animacion":
-            if not piezas:
-                raise SystemExit(f"la animación «{e['id']}» no puede ir primera: necesita algo antes (una placa)")
-            siguiente = next((clips[x["id"]][0][0] for x in escenas[k + 1:] if clips.get(x["id"])), None)
-            hacia = cuadro(siguiente, trabajo / f"a_{e['id']}_hacia.png", False) if siguiente else None
-            sumar(*clip_animacion(e, hacia), e["id"])
-        else:
-            for archivo, dur in clips.get(e["id"], []):
-                sumar(archivo, dur, e["id"])
-        if t_salida == t0:
-            continue   # la escena no está en estas tomas
-        falta = con_voz_de(e["id"], t0) - (t_salida - t0)
-        if falta > 1 / FPS:   # la voz es más larga que la escena: se queda quieta en su último cuadro
-            png = cuadro(piezas[-1], trabajo / f"q_{e['id']}.png", True)
-            sumar(quieto(png, falta, trabajo / f"q_{e['id']}.mp4"), falta, e["id"])
-    clip_placa("fin", aj["placa_fin"])
-    if not piezas:
-        raise SystemExit("no quedó nada para armar: ¿las tomas tienen las escenas del guion?")
+        for e in guion["escenas"]:
+            if e.get("superficie") == "filmacion":
+                clips[e["id"]] = [clip_filmacion(e, guion, binarios, trabajo, c, aj, interno, geometria, componer,
+                                                 la_mascara)]
 
-    # 5. todo junto, con música y voz si las hay
-    lista = trabajo / "lista.txt"
-    lista.write_text("".join(f"file '{p.as_posix()}'\n" for p in piezas), encoding="utf-8")
-    final = nombre_video(binarios, interno, date.today().strftime("%y%m%d"))
-    musica = guion.get("musica")
-    cmd = [ff, "-y", "-f", "concat", "-safe", "0", "-i", str(lista)]
-    filtro = ""
-    if musica:
-        musica = os.path.expandvars(musica)
-        cmd += ["-i", musica]
-        filtro = filtro_musica(ff, musica, t_salida, aj["musica_lufs_con_voz"] if voces else aj["musica_lufs"])
-    if voces:
-        primero = 2 if musica else 1
-        for v, _ in voces:
-            cmd += ["-i", str(v)]
-        filtro = ";".join(x for x in (filtro, filtro_audio([(primero + j, t) for j, (_, t) in enumerate(voces)],
-                                                             bool(musica), t_salida, aj)) if x)
-    if filtro:
-        cmd += ["-filter_complex", filtro, "-map", "0:v", "-map", "[sal]" if voces else "[a]",
-                "-c:a", "aac", "-b:a", "160k", "-t", f"{t_salida:.3f}"]
-    cmd += ["-c:v", "copy", "-movflags", "+faststart", str(final)]
-    correr(cmd)
-    final.with_suffix(".escenas.json").write_text(json.dumps(
-        {"tomas": tomas, "interno": interno, "voces": [{"archivo": v.name, "t": round(t, 2)} for v, t in voces],
-         "escenas": tiempos}, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"{final} ({t_salida:.1f} s)")
-    return final
+        # 4. en el orden del guion: placas, clips, animaciones y, donde haya voz, lo que haga falta para que entre
+        piezas: list[Path] = []
+        tiempos: list[dict] = []
+        voces: list[tuple[Path, float]] = []
+        t_salida = 0.0
+
+        def sumar(archivo: Path, dur: float, escena: str) -> None:
+            nonlocal t_salida
+            piezas.append(archivo)
+            if tiempos and tiempos[-1]["escena"] == escena:
+                tiempos[-1]["t1"] = round(t_salida + dur, 2)
+            else:
+                tiempos.append({"escena": escena, "t0": round(t_salida, 2), "t1": round(t_salida + dur, 2)})
+            t_salida += dur
+
+        def cuadro(video: Path, destino: Path, ultimo: bool) -> Path:
+            if ultimo:   # el último cuadro de verdad: se escribe cada uno de los del final y queda el último
+                correr([ff, "-y", "-sseof", "-0.5", "-i", str(video), "-update", "1", str(destino)])
+            else:
+                correr([ff, "-y", "-i", str(video), "-frames:v", "1", str(destino)])
+            return destino
+
+        def quieto(png: Path, dur: float, destino: Path, fundido: bool = False) -> Path:
+            fades = f",fade=t=in:st=0:d=0.4,fade=t=out:st={dur - 0.4:.3f}:d=0.4" if fundido else ""
+            correr([ff, "-y", "-loop", "1", "-i", str(png), "-t", f"{dur:.3f}", "-vf", f"fps={FPS}{fades},format=yuv420p",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", str(destino)])
+            return destino
+
+        def con_voz_de(escena: str, t0: float) -> float:
+            """La voz de la escena, si hay: anotada para la mezcla; devuelve cuánto tiene que durar la escena como mínimo."""
+            if not con_voz:
+                return 0.0
+            v = voz_de(binarios, escena)
+            if v is None:
+                return 0.0
+            voces.append((v, t0 + aj["voz_retardo"]))
+            return duracion(v) + aj["voz_retardo"] + aj["voz_margen"]
+
+        pl = guion.get("placas") or {}
+
+        def clip_placa(clave: str, dur: float) -> None:
+            datos = pl.get(clave)
+            if not datos:
+                return
+            dur = max(dur, con_voz_de(f"placa_{clave}", t_salida))
+            png = trabajo / f"placa_{clave}.png"
+            placa(m, datos.get("titulo", ""), datos.get("subtitulo", ""), png, c, datos.get("con"), base)
+            sumar(quieto(png, dur, trabajo / f"p_{clave}.mp4", fundido=True), dur, f"placa_{clave}")
+
+        def clip_animacion(e: dict, hacia: Path | None) -> tuple[Path, float]:
+            dur, tr = float(e.get("segundos", 5)), float(aj["transicion_s"])
+            desde = cuadro(piezas[-1], trabajo / f"a_{e['id']}_desde.png", True)
+            q = f"fps={FPS},format=yuv420p,settb=AVTB"
+            py = c["pantalla_y"]
+            entradas = ["-loop", "1", "-t", f"{tr}", "-i", str(desde),
+                        "-loop", "1", "-i", str(trabajo / f"fondo_{e['id']}.png"),
+                        "-stream_loop", "-1", "-i", str(binarios / e["archivo"]),
+                        "-loop", "1", "-i", str(trabajo / f"capa_{e['id']}.png")]
+            filtro = (f"[2:v]scale={c['w'] - 80}:-2,setpts=PTS-STARTPTS[an];"
+                      f"[1:v][an]overlay=(W-w)/2:{py}+({c['pantalla_h']}-h)/2[fa];[fa][3:v]overlay=0:0,"
+                      f"trim=duration={dur},setpts=PTS-STARTPTS,{q}[b];[0:v]{q}[a];"
+                      f"[a][b]xfade=transition={aj['transicion']}:duration={tr}:offset=0")
+            if hacia is not None:
+                entradas += ["-loop", "1", "-t", f"{tr}", "-i", str(hacia)]
+                filtro += f"[ab];[4:v]{q}[c];[ab][c]xfade=transition={aj['transicion']}:duration={tr}:offset={dur - tr}"
+            out = trabajo / f"a_{e['id']}.mp4"
+            # yuv420p explícito: si no, sale en 4:4:4 y, pegado sin recodificar, muchos reproductores cortan ahí
+            correr([ff, "-y", *entradas, "-filter_complex", filtro, "-t", f"{dur}",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", str(out)])
+            return out, dur
+
+        clip_placa("inicio", aj["placa_inicio"])
+        escenas = guion["escenas"]
+        for k, e in enumerate(escenas):
+            t0 = t_salida
+            if e.get("superficie") == "animacion":
+                if not piezas:
+                    raise SystemExit(f"la animación «{e['id']}» no puede ir primera: necesita algo antes (una placa)")
+                siguiente = next((clips[x["id"]][0][0] for x in escenas[k + 1:] if clips.get(x["id"])), None)
+                hacia = cuadro(siguiente, trabajo / f"a_{e['id']}_hacia.png", False) if siguiente else None
+                sumar(*clip_animacion(e, hacia), e["id"])
+            else:
+                for archivo, dur in clips.get(e["id"], []):
+                    sumar(archivo, dur, e["id"])
+            if t_salida == t0:
+                continue   # la escena no está en estas tomas
+            falta = con_voz_de(e["id"], t0) - (t_salida - t0)
+            if falta > 1 / FPS:   # la voz es más larga que la escena: se queda quieta en su último cuadro
+                png = cuadro(piezas[-1], trabajo / f"q_{e['id']}.png", True)
+                sumar(quieto(png, falta, trabajo / f"q_{e['id']}.mp4"), falta, e["id"])
+        clip_placa("fin", aj["placa_fin"])
+        if not piezas:
+            raise SystemExit("no quedó nada para armar: ¿las tomas tienen las escenas del guion?")
+
+        # 5. todo junto, con música y voz si las hay
+        lista = trabajo / "lista.txt"
+        lista.write_text("".join(f"file '{p.as_posix()}'\n" for p in piezas), encoding="utf-8")
+        musica = guion.get("musica")
+        cmd = [ff, "-y", "-f", "concat", "-safe", "0", "-i", str(lista)]
+        filtro = ""
+        if musica:
+            musica = os.path.expandvars(musica)
+            cmd += ["-i", musica]
+            filtro = filtro_musica(ff, musica, t_salida, aj["musica_lufs_con_voz"] if voces else aj["musica_lufs"])
+        if voces:
+            primero = 2 if musica else 1
+            for v, _ in voces:
+                cmd += ["-i", str(v)]
+            filtro = ";".join(x for x in (filtro, filtro_audio([(primero + j, t) for j, (_, t) in enumerate(voces)],
+                                                                 bool(musica), t_salida, aj)) if x)
+        if filtro:
+            cmd += ["-filter_complex", filtro, "-map", "0:v", "-map", "[sal]" if voces else "[a]",
+                    "-c:a", "aac", "-b:a", "160k", "-t", f"{t_salida:.3f}"]
+        cmd += ["-c:v", "copy", "-movflags", "+faststart", str(final)]
+        correr(cmd)
+        final.with_suffix(".escenas.json").write_text(json.dumps(
+            {"tomas": tomas, "interno": interno, "voces": [{"archivo": v.name, "t": round(t, 2)} for v, t in voces],
+             "escenas": tiempos}, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"{final} ({t_salida:.1f} s)")
+        return final
+    except BaseException:
+        reserva = final.with_suffix(".escenas.json")   # el nombre reservado vuelve a quedar libre
+        if reserva.exists() and reserva.stat().st_size == 0:
+            reserva.unlink()
+        raise
 
 
 def clip_filmacion(e: dict, guion: dict, binarios: Path, trabajo: Path, c: dict, aj: dict, interno: bool,
@@ -734,14 +804,14 @@ def clip_filmacion(e: dict, guion: dict, binarios: Path, trabajo: Path, c: dict,
     for t in tramos:
         a, b, vel = float(t.get("desde") or 0), float(t["hasta"] if t.get("hasta") is not None else total), \
             float(t.get("vel") or 1)
-        if b <= a or vel <= 0:
-            raise SystemExit(f"filmación «{e['id']}»: tramo {t} vacío o con velocidad inválida")
+        if b <= a or vel <= 0 or (b - a) / vel < 2 / FPS:
+            raise SystemExit(f"filmación «{e['id']}»: tramo {t} vacío, de menos de dos cuadros o con velocidad inválida")
         partes.append((a, b, vel))
         dur += (b - a) / vel
     sw, sh = tamano(video)
     recorte, (pw, ph, px, py) = geometria(e, sw, sh, False)
     zonas = [] if interno else zonas_de(guion, {"tapar": e.get("tapar")}, None, 0, total)
-    filtro = filtro_tapar(zonas, 0.0, "[0:v]", "[t]") + ";"
+    filtro = filtro_tapar(zonas, 0.0, "[0:v]", "[t]", sw, sh) + ";"
     filtro += f"[t]{recorte},split={len(partes)}" + "".join(f"[f{i}]" for i in range(len(partes))) + ";"
     filtro += "".join(f"[f{i}]trim=start={a:.3f}:end={b:.3f},setpts=(PTS-STARTPTS)/{vel:.4f},fps={FPS}[g{i}];"
                       for i, (a, b, vel) in enumerate(partes))
@@ -757,23 +827,33 @@ def clip_filmacion(e: dict, guion: dict, binarios: Path, trabajo: Path, c: dict,
     return out, dur
 
 
+def instantes(largo: float, cada: float) -> list[float]:
+    n = int(largo / cada) + 1
+    return [round(k * cada, 3) for k in range(n) if k * cada < largo]
+
+
+def cuadro_en(video: Path, t: float, destino: Path) -> None:
+    """El cuadro que se ve en el segundo t (búsqueda exacta: el nombre dice el segundo de verdad)."""
+    correr([entorno.ffmpeg(), "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", str(video), "-frames:v", "1", str(destino)])
+
+
 def cuadros(guion_ruta: Path, cada: float | None = None, video: Path | None = None) -> Path:
     """Un PNG por escena del último video (o del que se diga), o uno cada `cada` segundos para revisar todo."""
     guion = yaml.safe_load(guion_ruta.read_text(encoding="utf-8"))
     binarios = Path(os.path.expandvars(guion["binarios"]))
-    if video is None:
-        videos = sorted(binarios.glob("video_*_v*.mp4"), key=lambda p: p.stat().st_mtime)
+    if video is None:   # el último de difusión: es el que se revisa antes de mostrar; la interna se pide con --video
+        videos = sorted((p for p in binarios.glob("video_*_v*.mp4") if not p.stem.endswith("_interno")),
+                        key=lambda p: p.stat().st_mtime)
         if not videos:
-            raise SystemExit("todavía no hay video")
+            raise SystemExit("todavía no hay video de difusión (para la interna: --video <mp4>)")
         video = videos[-1]
+        print(f"reviso {video.name}")
     carpeta = binarios / f"cuadros_{video.stem}"
     carpeta.mkdir(exist_ok=True)
     ff = entorno.ffmpeg()
     if cada:
-        correr([ff, "-y", "-i", str(video), "-vf", f"fps=1/{cada}", str(carpeta / "c_%05d.png")])
-        for p in sorted(carpeta.glob("c_*.png")):
-            t = (int(p.stem[2:]) - 1) * cada
-            p.replace(carpeta / f"{t:07.2f}.png")
+        for t in instantes(duracion(video), cada):
+            cuadro_en(video, t, carpeta / f"{t:07.2f}.png")
     else:
         escenas = json.loads(video.with_suffix(".escenas.json").read_text(encoding="utf-8"))["escenas"]
         for e in escenas:
@@ -792,11 +872,9 @@ def muestras(guion_ruta: Path, toma: int, cada: float = 1.0) -> Path:
     video = binarios / f"toma_{toma}.mkv"
     carpeta = binarios / f"muestras_toma_{toma}"
     carpeta.mkdir(exist_ok=True)
-    correr([entorno.ffmpeg(), "-y", "-i", str(video), "-vf", f"fps=1/{cada}", str(carpeta / "m_%05d.png")])
-    for p in sorted(carpeta.glob("m_*.png")):
-        t = (int(p.stem[2:]) - 1) * cada
+    for t in instantes(duracion(video), cada):
         escena = next((e["id"] for e in marcas["escenas"] if e["t0"] <= t < e["t1"]), "fuera")
-        p.replace(carpeta / f"{t:07.1f}_{escena}.png")
+        cuadro_en(video, t, carpeta / f"{t:07.2f}_{escena}.png")
     w, h = tamano(video)
     print(f"{carpeta} (la toma mide {w}×{h}: las zonas van en esos píxeles y en segundos de la toma)")
     return carpeta
