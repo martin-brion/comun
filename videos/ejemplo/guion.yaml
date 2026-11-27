@@ -1,0 +1,44 @@
+# Guion inventado: el alta de una persona con un agente de código, más la PC nueva filmada con un celular.
+# Ninguna persona ni empresa real. Para correrlo hace falta una pestaña de herdr «Alta» con un agente que sepa hacer
+# el alta en modo ensayo; la filmación va en binarios/filmacion/pc_nueva.mp4.
+titulo: "Alta de una persona con un prompt"
+formato: pc
+marca: marca/marca.json                    # al lado del guion
+binarios: '%TEMP%\videos_ejemplo'
+datos_reales: true
+tapar:
+  - {x: 0, y: 0, w: 1920, h: 40}            # la barra de título de la ventana
+escritorio: {monitor: 1}
+terminal: {pestana: "Alta"}
+placas:
+  inicio: {titulo: "Alta en un prompt", subtitulo: "Correo, usuario, sistema, agenda y organigrama",
+           locucion: "Así damos de alta a una persona nueva"}
+  fin: {titulo: "ejemplo.test", subtitulo: "IA aplicada a la operación"}
+escenario:
+  - "agente abierto en la pestaña «Alta» de herdr, con el flujo de alta en modo ensayo"
+  - "CV inventado de Ana Prueba en la carpeta de entrada del flujo"
+  - "No molestar prendido; solo la terminal y el navegador a la vista"
+edicion: {trabajo_max: 4, leer_hito: 1.5}
+escenas:
+  - id: pedido
+    superficie: terminal
+    texto: "Le pasás el CV y el puesto"
+    locucion: "Le paso el CV y le digo qué puesto va a ocupar"
+    pasos:
+      - terminal.enfocar: {}
+      - terminal.prompt:
+          texto: "Alta de la persona del CV ana_prueba.pdf, puesto analista de compras, empieza el lunes"
+          hitos: ['(?i)correo .*cread', '(?i)usuario de dominio .*cread', '(?i)usuario de odoo .*cread',
+                  '(?i)planning', '(?i)organigrama']
+          leer: 4
+  - id: resultado
+    superficie: escritorio
+    texto: "El organigrama nuevo, listo para la inducción"
+    pasos:
+      - escritorio.abrir: "%TEMP%\videos_ejemplo\organigrama.pdf"
+      - pausa: 3
+  - id: pc
+    superficie: filmacion
+    texto: "Enchufás el pendrive y la PC se instala sola"
+    archivo: filmacion/pc_nueva.mp4
+    tramos: [{desde: 0, hasta: 6}, {desde: 6, hasta: 1200, vel: 150}, {desde: 1200, hasta: 1206}]
