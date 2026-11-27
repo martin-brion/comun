@@ -70,6 +70,8 @@ antes de mandar el prompt (lo que ya estaba en el historial no cuenta), o la per
 (2 s) es lo que la toma espera de verdad con el resultado quieto al terminar: es lo que la edición puede mostrar. La edición acelera el trabajo y congela un instante cada hito: así se lee el
 resultado de cada paso. Un hito que no apareció se avisa al terminar la toma.
 
+**Antes de grabar**, la toma pone la pestaña del panel al frente y, con `esc: true` en `terminal:`, manda un Esc a la ventana del frente (que tiene que ser la de herdr: es lo que se graba) para cerrar un menú abierto del cliente; una sola vez y solo con el agente quieto. Al terminar, aunque falle, vuelve al frente la pestaña que estaba.
+
 **Permisos del agente.** Si el agente pide confirmar algo, la toma espera a que alguien conteste en la terminal; ese
 tiempo cuenta como trabajo y se acelera.
 

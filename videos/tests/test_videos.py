@@ -129,6 +129,15 @@ class Diseno(unittest.TestCase):
             dos = editar.nombre_video(d, True, "261127", reservar=True)
             self.assertEqual((uno.name, dos.name), ("video_261127_v1.mp4", "video_261127_v2_interno.mp4"))
 
+    def test_la_raiz_del_repo_con_tildes(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d) / "carpeta con tildes áéñ"
+            (repo / "videos").mkdir(parents=True)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            guion = repo / "videos" / "guion.yaml"
+            guion.write_text("x: 1", encoding="utf-8")
+            self.assertEqual(editar.base_de(guion).resolve(), repo.resolve())
+
     def test_nombres_de_video(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
@@ -187,6 +196,45 @@ class Panel(unittest.TestCase):
         c = self.falso({"w1": [{"tab_id": "t1", "label": "Alta"}], "w2": [{"tab_id": "t2", "label": "Otra"}]})
         self.assertEqual(terminal.resolver({"pestana": "Alta"}, c), "w1:p")
         self.assertEqual(terminal.resolver({"panel": "x:p9"}, c), "x:p9")
+
+    def test_enfocar_recuerda_y_devuelve_la_pestana_del_frente(self):
+        llamadas = []
+        base = self.falso({"w1": [{"tab_id": "t1", "label": "Alta"}]})
+
+        def correr(*args, **kw):
+            llamadas.append(args)
+            if args[:2] == ("workspace", "list"):
+                return {"workspaces": [{"workspace_id": "w1", "label": "uno", "focused": True, "active_tab_id": "t0"}]}
+            if args[:2] == ("pane", "get"):
+                return {"pane": {"tab_id": "t1"}}
+            if args[:2] == ("tab", "focus"):
+                return {}
+            return base(*args, **kw)
+
+        class Esc:
+            teclas = []
+
+            def tecla(self, t):
+                self.teclas.append(t)
+
+        esc = Esc()
+        t = terminal.Terminal({"pestana": "Alta", "esc": True}, esc=esc, correr=correr)
+        terminal.time.sleep, viejo = (lambda s: None), terminal.time.sleep
+        try:
+            t.estado = lambda: "idle"
+            t.preparar()          # el Esc va una sola vez, antes de grabar
+            t.enfocar({})         # enfocar no manda teclas
+            t.enfocar({})
+            t.restaurar()
+            enfoques = [a[2] for a in llamadas if a[:2] == ("tab", "focus")]
+            self.assertEqual(enfoques, ["t1", "t1", "t1", "t0"])
+            self.assertEqual(esc.teclas, ["esc"])
+            otro = terminal.Terminal({"pestana": "Alta", "esc": True}, esc=esc, correr=correr)
+            otro.estado = lambda: "working"
+            otro.preparar()       # con el agente trabajando, ningún Esc
+            self.assertEqual(esc.teclas, ["esc"])
+        finally:
+            terminal.time.sleep = viejo
 
     def test_pestana_ambigua_frena(self):
         c = self.falso({"w1": [{"tab_id": "t1", "label": "Alta"}], "w2": [{"tab_id": "t2", "label": "Alta"}]})

@@ -72,6 +72,7 @@ class Terminal:
         self.panel = resolver(self.cfg, correr)
         self.esc = esc
         self._base: str | None = None   # lo que mostraba el panel antes de escribir: lo viejo no cuenta como resultado
+        self._previa: str | None = None  # la pestaña que estaba al frente antes de la toma, para devolverla al final
 
     def estado(self) -> str:
         return str(self.correr("pane", "get", self.panel).get("pane", {}).get("agent_status", "unknown"))
@@ -82,15 +83,49 @@ class Terminal:
 
     # --- acciones del guion (argumento, marcas) -------------------------------------------------------------------
 
-    def enfocar(self, _arg=None, m=None) -> None:
-        """Trae la pestaña al frente en herdr."""
-        t0 = m.ahora() if m else 0
+    def _al_frente(self) -> None:
+        if self._previa is None:
+            activo = [w for w in self.correr("workspace", "list").get("workspaces", []) if w.get("focused")]
+            self._previa = activo[0].get("active_tab_id", "") if activo else ""
         tab = self.correr("pane", "get", self.panel).get("pane", {}).get("tab_id")
         if tab:
             self.correr("tab", "focus", tab)
+
+    def preparar(self) -> None:
+        """Antes de grabar: la pestaña del panel al frente y, con `esc: true` en `terminal:`, un Esc a la ventana del
+        frente para cerrar un menú abierto del cliente de herdr (el de sesiones, en ancho de celular), que taparía el
+        panel y se grabaría con los nombres de otras sesiones. El Esc va una sola vez, acá, y solo con el agente quieto:
+        con el agente trabajando, un Esc le corta el turno. La ventana de herdr tiene que estar al frente (es lo que se
+        graba)."""
+        self._al_frente()
+        if not self.cfg.get("esc"):
+            return
+        if self.esc is None:
+            raise SystemExit("terminal: `esc: true` necesita la superficie escritorio en la misma toma")
+        if self.estado() in ("working", "blocked"):
+            print("  (el agente está trabajando: no se manda el Esc; cerrá el menú de herdr a mano si está abierto)")
+            return
+        time.sleep(0.3)
+        self.esc.tecla("esc")
+        time.sleep(0.5)
+
+    def enfocar(self, _arg=None, m=None) -> None:
+        """Trae la pestaña al frente en herdr (sin teclas: el menú lo cierra `preparar`)."""
+        t0 = m.ahora() if m else 0
+        self._al_frente()
         time.sleep(0.8)
         if m:
             m.tramo("accion", t0)
+
+    def restaurar(self) -> None:
+        """Al terminar la toma (también si falló): vuelve al frente la pestaña que estaba antes. Si herdr no contesta,
+        lo avisa y sigue: no se pierde la toma por esto."""
+        if not self._previa:
+            return
+        try:
+            self.correr("tab", "focus", self._previa, timeout=10)
+        except Exception as e:   # noqa: BLE001 (una pestaña cerrada o herdr colgado)
+            print(f"  (no se pudo volver a la pestaña de antes: {type(e).__name__})")
 
     def escribir(self, texto, m=None) -> None:
         """De a pocas letras, para que se vea tipear (la edición lo lleva a `letras_s` parejo)."""
