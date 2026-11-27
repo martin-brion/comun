@@ -221,14 +221,20 @@ class Panel(unittest.TestCase):
         t = terminal.Terminal({"pestana": "Alta", "esc": True}, esc=esc, correr=correr)
         terminal.time.sleep, viejo = (lambda s: None), terminal.time.sleep
         try:
+            t.estado = lambda: "idle"
+            t.preparar()          # el Esc va una sola vez, antes de grabar
+            t.enfocar({})         # enfocar no manda teclas
             t.enfocar({})
-            t.enfocar({"esc": False})
+            t.restaurar()
+            enfoques = [a[2] for a in llamadas if a[:2] == ("tab", "focus")]
+            self.assertEqual(enfoques, ["t1", "t1", "t1", "t0"])
+            self.assertEqual(esc.teclas, ["esc"])
+            otro = terminal.Terminal({"pestana": "Alta", "esc": True}, esc=esc, correr=correr)
+            otro.estado = lambda: "working"
+            otro.preparar()       # con el agente trabajando, ningún Esc
+            self.assertEqual(esc.teclas, ["esc"])
         finally:
             terminal.time.sleep = viejo
-        t.restaurar()
-        enfoques = [a[2] for a in llamadas if a[:2] == ("tab", "focus")]
-        self.assertEqual(enfoques, ["t1", "t1", "t0"])
-        self.assertEqual(esc.teclas, ["esc"])
 
     def test_pestana_ambigua_frena(self):
         c = self.falso({"w1": [{"tab_id": "t1", "label": "Alta"}], "w2": [{"tab_id": "t2", "label": "Alta"}]})

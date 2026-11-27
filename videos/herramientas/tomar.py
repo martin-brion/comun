@@ -280,6 +280,18 @@ def main(argv: list[str]) -> int:
     i1 = ids.index(args.hasta) + 1 if args.hasta else len(ids)
 
     s, superficie = abrir(guion, sups)
+    try:
+        return grabar_toma(args, s, superficie, binarios, escenas[i0:i1])
+    finally:   # pase lo que pase (un error, una acción mal escrita, Ctrl+C): el navegador se cierra y herdr vuelve
+        if s.w:
+            s.w.cerrar()
+        if s.term:
+            s.term.restaurar()
+
+
+def grabar_toma(args, s: Superficies, superficie, binarios: Path, escenas: list[dict]) -> int:
+    if s.term:
+        s.term.preparar()   # antes de grabar: la pestaña al frente y, si el guion lo pide, el menú de herdr cerrado
     if args.cuenta:
         for k in range(int(args.cuenta), 0, -1):
             print(f"empieza en {k}…", flush=True)
@@ -291,7 +303,7 @@ def main(argv: list[str]) -> int:
     error = None
     with grabador as reloj:
         m = Marcas(reloj)
-        for escena in escenas[i0:i1]:
+        for escena in escenas:
             m.escena = escena["id"]
             t0 = m.ahora()
             print(f"· {escena['id']}", flush=True)
@@ -304,10 +316,6 @@ def main(argv: list[str]) -> int:
                 break
             m.escenas.append({"id": escena["id"], "t0": t0, "t1": m.ahora()})
         time.sleep(0.5)
-    if s.w:
-        s.w.cerrar()
-    if s.term:
-        s.term.restaurar()
     if args.sin_grabar:
         print("ensayo terminado" + (f" con error en {error}" if error else ""))
         return 1 if error else 0

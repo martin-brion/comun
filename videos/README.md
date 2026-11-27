@@ -42,7 +42,7 @@ los datos del flujo que se muestra (el guion solo los nombra).
    navegador (`web.py iniciar <url>`, una vez, a mano), el celular emulado con su sesión, la terminal a la vista y
    «No molestar» de Windows prendido. El cliente de herdr sin menús abiertos (el de sesiones, en ancho de celular,
    tapa el panel y muestra los nombres de otras sesiones): un Esc con la terminal al frente, o `esc: true` en
-   `terminal:` del guion. Lo creado se anota en `00_estado.md` (nombres, nunca claves).
+   `terminal:` del guion, que lo manda antes de grabar, con la ventana de herdr al frente. Lo creado se anota en `00_estado.md` (nombres, nunca claves).
 3. **Ensayo.** `python herramientas/tomar.py <instancia>/guion.yaml --sin-grabar`, o una primera toma grabada que se
    tira: con un agente, con el flujo en modo ensayo (sin aplicar cambios). Lo que salió distinto se corrige en el guion.
 4. **Toma.** `python herramientas/tomar.py <instancia>/guion.yaml --cuenta 5`: prepara la superficie, graba y corre los
