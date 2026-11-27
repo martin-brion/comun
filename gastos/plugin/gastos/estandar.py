@@ -307,7 +307,12 @@ async def _adjunto(ctx, lote, x, respaldo, factura, entrada, ruta, datos, c, g):
     original = Path(fotos[n - 1]["ruta"]).read_bytes()
     if hashlib.sha256(original).hexdigest() != respaldo["sha256"]:
         raise g.GastoError(f"Foto {n}: cambió desde la propuesta; no se adjunta")
-    normal = await imagen.normalizar(original, max_px=config.ODOO_FOTO_MAX_PX, calidad=config.ODOO_FOTO_CALIDAD)
+    try:
+        normal = await imagen.normalizar(original, max_px=config.ODOO_FOTO_MAX_PX, calidad=config.ODOO_FOTO_CALIDAD)
+    except imagen.ImagenError as exc:
+        # La factura ya está: sin el adjunto la carga queda a medias y se retoma, no sale con un error crudo.
+        raise g.GastoTecnico(f"Foto {n}: no pude normalizarla para adjuntarla ({exc})",
+                             publico=f"No pude preparar la foto {n} para adjuntarla: repetí la carga en un momento.")
     checksum = hashlib.sha1(normal.datos).hexdigest()
     nombre = (f"Comprobante {x['marker']}.jpg" if n == x["n"] else
               f"Respaldo {x['marker']} foto {n:02d}.jpg")
@@ -361,6 +366,11 @@ async def _adjunto(ctx, lote, x, respaldo, factura, entrada, ruta, datos, c, g):
 
 
 RESUMEN_REVISION = "Revisar comprobante cargado por el bot"
+
+
+def lote_de_terminal(lote):
+    """Un lote de bot.terminal (motor 0.6.33): lo dice el lote, no su número."""
+    return bool(((lote or {}).get("extra") or {}).get("terminal"))
 
 
 async def _modelo_factura(ctx, c, g):
@@ -430,7 +440,12 @@ async def cargar(ctx, lote, c, plan, g):
             ident, entrada, ruta, datos = await _uno(ctx, lote, c, plan, x, g)
         except (g.GastoFrena, g.GastoTecnico, estado.EstadoError) as exc:
             frenado = f"se cortó la carga: {_publico(g, exc)}"
-            no_cargados[n] = frenado
+            _, datos = _intenciones(plan, c, g)
+            if (datos["fotos"].get(f"{plan['company_id']}/{x['n']}") or {}).get("id"):
+                # La factura ya está en Odoo, sin terminar: se completa al repetir la carga.
+                no_cargados[n] = f"la factura quedó creada sin terminar y se completa al repetir; {frenado}"
+            else:
+                no_cargados[n] = frenado
             continue
         except g.GastoError as exc:
             _, datos = _intenciones(plan, c, g)
@@ -482,6 +497,11 @@ async def _uno(ctx, lote, c, plan, x, g):
             ("invoice_origin", "=", x["marker"])], fields=campos_factura(c), limit=2)
         if len(filas) > 1:
             raise g.GastoError("Hay facturas ambiguas para el comprobante; requiere conciliación")
+        if filas and not (entrada or {}).get("id") and lote_de_terminal(lote):
+            # Un lote de terminal (bot.terminal) puede compartir número con el de otra terminal: una factura con su
+            # marcador de la que esta corrida no tiene el ID no se adopta, ni siquiera tras una respuesta perdida.
+            raise g.GastoError("Hay una factura con el marcador de este lote que esta carga no puede reconocer como suya; "
+                               "requiere conciliación")
         if filas:
             ident = filas[0]["id"]
             entrada = {"payload": _payload(plan, x), "estado": "conocido", "id": ident,

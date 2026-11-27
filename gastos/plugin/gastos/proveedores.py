@@ -29,8 +29,11 @@ SECRETOS = ('ODOO_LOGIN', 'ODOO_API_KEY')
 NO_FACTURA = 'No se crea ninguna factura sin proveedor.'
 
 
-def disponible(c):
-    """El toolbelt de alta si este destino es el ERP global del bot; si no, None."""
+def disponible(c, ctx=None):
+    """El toolbelt de alta si este destino es el ERP global del bot; si no, None. Desde una terminal (bot.terminal), None:
+    ahí no corren los toolbelts."""
+    if getattr(ctx, 'terminal', False):
+        return None
     alta = c.get('alta_proveedor')
     if not alta:
         return None
@@ -103,7 +106,7 @@ async def proponer(ctx, c, f, comercio, g):
     cuit = f.get('cuit')
     if not cuit:
         raise g.GastoError(f"No leí el CUIT/RUT del proveedor: corregí la lectura o excluí la foto. {NO_FACTURA}")
-    alta = disponible(c)
+    alta = disponible(c, ctx)
     if not alta:
         raise g.GastoError(f"Falta el proveedor CUIT/RUT {cuit} y en este destino no hay alta desde el bot: se da de alta "
                            f"en Odoo y se vuelve a preparar este lote. {NO_FACTURA}")
@@ -131,7 +134,7 @@ async def resolver(ctx, c, plan, g):
             pendientes.setdefault(f['alta_proveedor']['id_fiscal'], []).append(f)
     if not pendientes:
         return []
-    alta = disponible(c)
+    alta = disponible(c, ctx)
     if not alta:
         raise g.GastoError('Cambió el alta de proveedores desde la propuesta; prepará otra.')
     altas, avisos = [], []
@@ -215,7 +218,7 @@ async def proponer_borrador(ctx, c, f, comercio, g):
         await a_regularizar(ctx, c, f, g)
         return _marcar(f, f'No se leyó el CUIT/RUT del emisor: {A_REGULARIZAR}.')
     provisoria = await g.fiscal.pendiente(ctx, c, cuit, g)
-    alta = disponible(c)
+    alta = disponible(c, ctx)
     pedido = {'id_fiscal': cuit, 'pais': c['padron_proveedores'], 'leido': _leido(comercio)}
     if provisoria and alta:
         f['alta_proveedor'] = pedido        # el alta con el OK la retoma: si el padrón ahora la valida, queda válida
@@ -337,7 +340,7 @@ async def resolver_borrador(ctx, c, plan, g):
         return []
     ruta = _ruta_altas(plan['lote_id'], c)
     registro = estado.leer(ruta) or {'version': 1, 'altas': {}}
-    alta = disponible(c)
+    alta = disponible(c, ctx)
     altas = []
     locks = LOCKS.setdefault(asyncio.get_running_loop(), {})
     for cuit, filas in pendientes.items():

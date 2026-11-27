@@ -845,8 +845,12 @@ async def _foto_adjuntar(ctx, lote, line, expense_id, respaldo, modelo="hr.expen
     path = Path(foto["ruta"])
     if hashlib.sha256(path.read_bytes()).hexdigest() != respaldo["sha256"]:
         raise GastoError(f"Foto {n}: cambió desde la propuesta; no se adjunta.")
-    normal = await imagen.normalizar(path.read_bytes(), max_px=config.ODOO_FOTO_MAX_PX,
-                                     calidad=config.ODOO_FOTO_CALIDAD)
+    try:
+        normal = await imagen.normalizar(path.read_bytes(), max_px=config.ODOO_FOTO_MAX_PX,
+                                         calidad=config.ODOO_FOTO_CALIDAD)
+    except imagen.ImagenError as exc:
+        raise GastoTecnico(f"Foto {n}: no pude normalizarla para adjuntarla ({exc})",
+                           publico=f"No pude preparar la foto {n} para adjuntarla: repetí la carga en un momento.") from None
     digest = hashlib.sha1(normal.datos).hexdigest()
     name = (f"Comprobante {line['marker']}.jpg" if n == line["n"] else
             f"Respaldo {line['marker']} foto {n:02d}.jpg")
@@ -1201,7 +1205,8 @@ async def _operacion(ctx, args, cargar_corrido=False, aprobacion=None):
                         raise GastoError("La propuesta cambió o no tiene la aprobación exacta. Volvé a revisar.")
                     c["_huella_aprobada"] = huella(lote_id)
                     recibo = estado.recibo(lote_id, c)
-                    if (configuracion.ante_error_borrador(c) and recibo and recibo.get("estado") == "cargado"
+                    if ((configuracion.ante_error_borrador(c) or getattr(ctx, "terminal", False))
+                            and recibo and recibo.get("estado") == "cargado"
                             and recibo.get("huella") == c["_huella_aprobada"]):
                         # Repetir el OK de una carga completa devuelve lo registrado: Administración puede haber
                         # confirmado una factura desde entonces, y volver a verificarla como borrador la daría por perdida.
@@ -1848,6 +1853,21 @@ async def _previo_directo(ctx, args):
         return None
 
 
+async def _terminal_cargar(t, argv):
+    from . import terminal
+    return await terminal.cargar(t, argv, sys.modules[__name__])
+
+
+def _de_terminal():
+    """El comando de terminal `gastos cargar`, solo en un motor que trae bot.terminal (0.6.33): el mismo plugin carga en
+    los anteriores, sin él."""
+    if "terminal" not in plugins.Plugin.__dataclass_fields__:
+        return {}
+    from bot.terminal import ComandoTerminal
+    return {"terminal": (ComandoTerminal("cargar", _terminal_cargar, "Carga un lote de comprobantes desde la terminal: "
+                                         "gastos cargar --empresa E --carpeta FOTOS --lecturas L.json --propuesta P.json"),)}
+
+
 def _deshacer_de_la_carga():
     """El argumento `deshacer` de gasto_cargar, solo en un motor que lo conoce (0.6.31): el mismo plugin carga en los
     anteriores. La carga retoma por identificadores verificables, así que un reintento con la misma propuesta no duplica."""
@@ -1937,6 +1957,7 @@ async def _resumen_interno(ctx, args, tecnico):
              f"{(x['imputacion']['texto'] + ' · ') if (x.get('imputacion') or {}).get('texto') else ''}"
              f"ref. {x['referencia'] or 'sin número'}"
              + (f"\n  Factura: {fiscal.resumen(x['fiscal'])}" if x.get("fiscal") else "")
+             + (f"\n  {x['receptor_aviso']}" if x.get("receptor_aviso") else "")
              for x in plan["comprobantes"]]
     names = "\n".join(f"Informe {mode}: {name}" for mode, name in plan["sheet_names"].items())
     excluded = ", ".join(str(f["n"]) for f in plan.get("fotos_excluidas", [])) or "ninguna"
@@ -2058,7 +2079,7 @@ PLUGIN = plugins.Plugin(
         plugins.PuntoExtension("gastos.politica", 1, _validar_politica),
         plugins.PuntoExtension("gastos.seguimiento", 1, _validar_seguimiento),
         plugins.PuntoExtension("gastos.emisores", 1, _validar_observados),
-        plugins.PuntoExtension("gastos.presentacion", 1, presentacion.validar_proveedor)))
+        plugins.PuntoExtension("gastos.presentacion", 1, presentacion.validar_proveedor)), **_de_terminal())
 
 
 # La sala personal del trámite de gastos: su nota de sistema le dice al modelo qué tools usar y qué workflow seguir.

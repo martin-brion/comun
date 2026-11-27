@@ -125,6 +125,12 @@ anulación como su inversa: si la instancia la lista en `directo.json`, la carga
 La rendición, un alta de proveedor y un destino con seguimiento siguen con tarjeta. Detalle en
 `CONTRATO.md`. Carga también en motores previos.
 
+0.1.0-dev.21: la carga desde una terminal, con el motor 0.6.33. `python -m bot.terminal ... gastos cargar --empresa E
+--carpeta FOTOS --lecturas L.json --propuesta P.json` corre el mismo preparar → OK → cargar del chat sobre un lote local,
+con la identidad y las credenciales de la persona, en Linux o macOS y con `vision_service`. Las lecturas y la
+propuesta las arma el agente de código; el OK es teclear la huella; la presentación queda como `.eml` sin
+enviar. Sin alta de proveedor. Detalle en `CONTRATO.md`.
+
 0.1.0-dev.20: el mail que presenta el lote, opcional por empresa. `"presentacion": "<proveedor>"` nombra el
 proveedor de `gastos.presentacion/1`, de la casa, que dice a quién va. El plugin arma el contenido desde el resultado de la
 carga (facturas con link, marcadas con su motivo, no cargadas, totales por moneda); la casa puede sumar un
