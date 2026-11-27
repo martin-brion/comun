@@ -633,17 +633,30 @@ del motor: anota la primera vez que ofreció el mail y, si se lo vuelven a pedir
 prepararlo otra vez, porque otro OK lo manda de nuevo. `gasto_presentacion {lote_id, empresa, destino}` (solo lectura, con
 el candado del lote) lo devuelve después, sobre una carga completa. `gasto_anular` la borra con el recibo.
 
-0.1.0-dev.21. Con el motor 0.6.33 (`bot.terminal`), el comando de terminal `gastos cargar` corre el mismo `gasto_preparar` →
+0.1.0-dev.21. Con el motor 0.6.33 (`bot.terminal`), el comando de terminal `gastos cargar` corre el mismo `preparar` →
 OK → `gasto_cargar` fuera del chat: `python -m bot.terminal --entorno E --datos D --persona LOGIN --nombre N gastos cargar
---empresa E [--destino D] --carpeta FOTOS --lecturas L.json --propuesta P.json [--salida S]`. Solo en el circuito de facturas.
-Las fotos o PDF de `--carpeta` se numeran por orden de nombre; las lecturas (`{"<n>": lectura}`, esquema `fiscal.ESQUEMA`) y
-la propuesta (`{"comprobantes", "excluir_fotos"}` de `gasto_preparar`) las arma el agente de código. Misma configuración,
-custodia, firma, recibos y presentación que el chat; la propuesta es la misma con las mismas lecturas, salvo el número de lote,
-su `revision` y lo que dependa del alta. El usuario del ERP sale de Odoo con las credenciales de la persona
-(`t.vincular_erp`). El OK es el de la terminal: teclear la huella. El lote es de terminal (L900000 a L999999); si su número
-ya tiene facturas en la compañía (`invoice_origin` con `[<lote>/`), el lote local se descarta y se toma otro. Repetir con el
-mismo material retoma la misma corrida. No hay alta de proveedor (`proveedores.disponible(c, ctx)` es None con un contexto de
-terminal): con `ante_error: borrador` la factura va con el proveedor a regularizar, marcada; sin eso, frena como en un
-destino sin alta. La presentación, si la empresa la declara, queda en `<salida>/<lote>.eml` sin enviar (sin remitente y con
-`X-Unsent: 1`). Sale con 0 si la carga quedó completa, 1 si no se cargó o quedó a medias, 2 por uso. En un motor anterior el
-plugin carga igual, sin el comando.
+--empresa E [--destino D] --carpeta FOTOS --lecturas L.json --propuesta P.json [--salida S] [--lote-nuevo]`. Solo en el
+circuito de facturas y en un destino de factura `estandar`. `--nombre` es obligatorio: va en la propuesta, como en el chat.
+
+Las fotos de `--carpeta` (jpg, jpeg, png o webp; un PDF frena: no se adjunta como foto) se numeran por orden de nombre. Las
+lecturas son `{"<archivo>": lectura}` (esquema `fiscal.ESQUEMA`; una que no es un objeto frena nombrando la foto) y la
+propuesta, `{"archivos", "comprobantes", "excluir_fotos"}`: `archivos` tiene que ser la lista de la carpeta en orden, para
+que cada número de foto sea el archivo que el agente leyó. Antes de preparar se normalizan todas las fotos con
+`vision_service`: si una no se puede adjuntar, o el servicio no está en esa máquina, no se escribe nada. Misma configuración,
+custodia, firma, recibos y presentación que el chat; con las mismas lecturas la propuesta es la misma salvo el número de lote,
+su `revision` (por eso la huella difiere) y lo que dependa del alta. El usuario del ERP sale de Odoo con las credenciales de la
+persona (`t.vincular_erp`). El OK es el de la terminal: teclear la huella en `/dev/tty`.
+
+El lote es de terminal (L900000 a L999999). Si su número ya tiene facturas en la compañía (`invoice_origin` con `[<lote>/`) y
+el lote no se usó en ninguna empresa ni destino, se descarta y se toma otro; si ya se usó, frena y pide `--lote-nuevo`, que
+descarta el lote local de ese material y empieza otro. En un lote de terminal, una factura con su marcador que esa corrida no
+empezó a crear no se adopta: es de otra terminal y pide conciliación. Repetir con el mismo material retoma la misma corrida.
+No hay alta de proveedor (`proveedores.disponible(c, ctx)` es None con un contexto de terminal): con `ante_error: borrador`
+la factura va con el proveedor a regularizar, marcada; sin eso, frena como en un destino sin alta. La presentación, si la
+empresa la declara, queda en `<salida>/<lote>.eml` sin enviar (sin remitente y con `X-Unsent: 1`), sin pisar uno que ya está.
+Sale con 0 si la carga quedó completa y sin comprobantes afuera, 1 si no se cargó, quedó a medias o dejó alguno afuera, y 2
+por uso. Los rechazos se muestran como en el chat, sin detalle técnico. En un motor anterior el plugin carga igual, sin el
+comando.
+
+También en la dev.21, en el chat: la tarjeta del OK dice el aviso del receptor de cada comprobante (`receptor_es_la_empresa` o
+un dígito mal leído), y un importe leído con más dígitos de los que entran al centavo (`1e30`) se toma como ilegible.

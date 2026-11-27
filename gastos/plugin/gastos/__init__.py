@@ -1952,6 +1952,7 @@ async def _resumen_interno(ctx, args, tecnico):
              f"{(x['imputacion']['texto'] + ' · ') if (x.get('imputacion') or {}).get('texto') else ''}"
              f"ref. {x['referencia'] or 'sin número'}"
              + (f"\n  Factura: {fiscal.resumen(x['fiscal'])}" if x.get("fiscal") else "")
+             + (f"\n  {x['receptor_aviso']}" if x.get("receptor_aviso") else "")
              for x in plan["comprobantes"]]
     names = "\n".join(f"Informe {mode}: {name}" for mode, name in plan["sheet_names"].items())
     excluded = ", ".join(str(f["n"]) for f in plan.get("fotos_excluidas", [])) or "ninguna"

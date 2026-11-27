@@ -5,6 +5,7 @@ como .eml sin enviar. Con un motor anterior, la suite no corre: el plugin carga 
 Todo inventado: CUIT de prueba con dígito verificador inválido, direcciones en example.test, IDs y comercios ficticios.
 """
 import copy
+import importlib
 import email
 import json
 import os
@@ -34,15 +35,17 @@ class TerminalTests(presentacion.PresentacionTests):
             shutil.copyfile(item["ruta"], self.carpeta / f"{n:02d}.jpg")
         with open(self.carpeta / "lecturas.json", "w", encoding="utf-8") as f:
             leidas = base.estado.leer(base.fiscal._ruta_lecturas("L000123"))
-            json.dump({n: v["lectura"] for n, v in leidas["fotos"].items()}, f, ensure_ascii=False)
-        with open(self.carpeta / "propuesta.json", "w", encoding="utf-8") as f:
-            json.dump({"comprobantes": self.rows}, f, ensure_ascii=False)
-        self.env = patch.dict(os.environ, {"PRINCIPAL_LOGIN": "persona_prueba", "PRINCIPAL_KEY": "falso_principal"})
-        self.env.start(); self.addCleanup(self.env.stop)
+            json.dump({f"{int(n):02d}.jpg": v["lectura"] for n, v in leidas["fotos"].items()}, f, ensure_ascii=False)
+        self.escribir_propuesta()
         self.dicho = []
         self.tecleado = None
 
-    def terminal(self):
+    def escribir_propuesta(self, **cambios):
+        with open(self.carpeta / "propuesta.json", "w", encoding="utf-8") as f:
+            json.dump({"archivos": ["01.jpg", "02.jpg", "03.jpg"], "comprobantes": self.rows, **cambios}, f,
+                      ensure_ascii=False)
+
+    def terminal(self, nombre="Ana Gomez"):
         prueba = self
 
         class Terminal(terminal.Terminal):
@@ -53,8 +56,9 @@ class TerminalTests(presentacion.PresentacionTests):
 
         def teclear(_):
             return self.tecleado(self) if callable(self.tecleado) else (self.tecleado or "")
-        return Terminal(terminal.contexto("ana.gomez", "Ana Gomez"), entrada=teclear, salida=self.dicho.append,
-                        interactiva=True)
+        ctx = terminal.contexto("ana.gomez", nombre, entorno={"PRINCIPAL_LOGIN": "persona_prueba",
+                                                              "PRINCIPAL_KEY": "falso_principal"})
+        return Terminal(ctx, entrada=teclear, salida=self.dicho.append, interactiva=True)
 
     def argv(self, **extra):
         a = {"--empresa": "taller", "--destino": "principal", "--carpeta": str(self.carpeta),
@@ -62,11 +66,9 @@ class TerminalTests(presentacion.PresentacionTests):
              **extra}
         return [x for k, v in a.items() for x in (k, v)]
 
-    async def correr(self, **extra):
-        comando = terminal.comando("gastos", "cargar") if "gastos" in plugins.PLUGINS else None
-        ejecutar = comando.ejecutar if comando else g._terminal_cargar
+    async def correr(self, nombre="Ana Gomez", banderas=(), **extra):
         with self.toolbelt(rc=1, crea=False, pendiente=True, error="no validó"):
-            return await ejecutar(self.terminal(), self.argv(**extra))
+            return await g._terminal_cargar(self.terminal(nombre), self.argv(**extra) + list(banderas))
 
     def teclear_la_huella(self):
         """La persona mira la huella que muestra la terminal y teclea sus primeros 8 caracteres."""
@@ -157,6 +159,64 @@ class TerminalTests(presentacion.PresentacionTests):
             self.assertEqual(await self.correr(), 0, "\n".join(self.dicho))
         self.assertIn(f"El número {usados[0]} ya tiene facturas en Odoo: tomo otro.", self.dicho)
         self.assertEqual(lotes.store().lote(usados[0])["extra"]["descartado"], True)
+
+    async def test_la_carpeta_cambiada_no_se_prepara(self):
+        (self.carpeta / "01.jpg").rename(self.carpeta / "04.jpg")
+        self.assertEqual(await self.correr(), 2)
+        self.assertIn("la carpeta cambió", "\n".join(self.dicho))
+        self.assertEqual(self.facturas(), [])
+
+    async def test_una_lectura_que_no_es_un_objeto(self):
+        with open(self.carpeta / "lecturas.json", "w", encoding="utf-8") as f:
+            json.dump({"01.jpg": []}, f)
+        self.assertEqual(await self.correr(), 2)
+        self.assertIn("La lectura de 01.jpg (foto 1) no es un objeto", "\n".join(self.dicho))
+
+    async def test_sin_nombre_no_corre(self):
+        self.assertEqual(await self.correr(nombre=""), 2)
+        self.assertIn("Falta --nombre", "\n".join(self.dicho))
+
+    async def test_una_foto_que_no_se_puede_adjuntar_no_escribe_nada(self):
+        from bot import imagen
+
+        async def rota(datos, **kw):
+            raise imagen.ImagenError("No pude abrir esa imagen")
+        self.teclear_la_huella()
+        with patch("bot.imagen.normalizar", side_effect=rota):
+            self.assertEqual(await self.correr(), 2)
+        self.assertIn("01.jpg: No pude abrir esa imagen", "\n".join(self.dicho))
+        self.assertEqual(self.facturas(), [])
+
+    async def test_un_pdf_en_la_carpeta(self):
+        (self.carpeta / "05.pdf").write_bytes(b"%PDF")
+        self.assertEqual(await self.correr(), 2)
+        self.assertIn("tiene un PDF", "\n".join(self.dicho))
+
+    async def test_una_factura_ajena_con_el_mismo_marcador_no_se_adopta(self):
+        original = terminal.lote_local
+
+        def con_ajena(login, consumidor, archivos):
+            lote = original(login, consumidor, archivos)
+            ajena = 38600 + len(self.erps["principal"]["account.move"])
+            self.erps["principal"]["account.move"][ajena] = {
+                "id": ajena, "company_id": [3, "Casa"], "invoice_origin": f"[{lote['lote_id']}/F02]",
+                "move_type": "in_invoice", "state": "draft"}
+            return lote
+        self.teclear_la_huella()
+        with patch.object(terminal, "lote_local", side_effect=con_ajena), \
+                patch.object(importlib.import_module(g.__name__ + ".terminal"), "_numero_libre", return_value=True):
+            rc = await self.correr()
+        self.assertEqual(rc, 1, "\n".join(self.dicho))
+        self.assertIn("no creó esta carga", "\n".join(self.dicho))
+
+    async def test_lote_nuevo(self):
+        self.teclear_la_huella()
+        self.tecleado = ""
+        await self.correr()
+        primero = self.lote_de_terminal()
+        await self.correr(banderas=["--lote-nuevo"])
+        self.assertEqual(len([i for i in self.lotes if i.startswith("L9")]), 2)
+        self.assertTrue(lotes.store().lote(primero)["extra"]["descartado"])
 
     async def test_uso(self):
         for extra, texto in (({"--carpeta": "/no/existe"}, "no es una carpeta"),

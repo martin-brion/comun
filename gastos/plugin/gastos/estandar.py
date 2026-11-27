@@ -363,6 +363,11 @@ async def _adjunto(ctx, lote, x, respaldo, factura, entrada, ruta, datos, c, g):
 RESUMEN_REVISION = "Revisar comprobante cargado por el bot"
 
 
+def lote_de_terminal(lote_id):
+    """Los lotes de bot.terminal van de L900000 a L999999."""
+    return isinstance(lote_id, str) and lote_id[1:].isdigit() and int(lote_id[1:]) >= 900000
+
+
 async def _modelo_factura(ctx, c, g):
     if "_modelo_factura" not in c:
         filas = await g._odoo(ctx, "ir.model", "search_read", [("model", "=", "account.move")], fields=["model"], limit=1)
@@ -482,6 +487,10 @@ async def _uno(ctx, lote, c, plan, x, g):
             ("invoice_origin", "=", x["marker"])], fields=campos_factura(c), limit=2)
         if len(filas) > 1:
             raise g.GastoError("Hay facturas ambiguas para el comprobante; requiere conciliación")
+        if filas and not entrada and lote_de_terminal(plan["lote_id"]):
+            # Un lote de terminal (bot.terminal) puede compartir número con el de otra terminal: una factura con su
+            # marcador que esta corrida no empezó a crear no es suya.
+            raise g.GastoError("Hay una factura con el marcador de este lote que no creó esta carga; requiere conciliación")
         if filas:
             ident = filas[0]["id"]
             entrada = {"payload": _payload(plan, x), "estado": "conocido", "id": ident,

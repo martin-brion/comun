@@ -136,7 +136,10 @@ def importe(valor, *, cero=True):
         return None
     if not d.is_finite() or d < 0 or d.as_tuple().exponent < -4:
         return None
-    return d.quantize(CENTAVO, ROUND_HALF_UP)
+    try:
+        return d.quantize(CENTAVO, ROUND_HALF_UP)
+    except InvalidOperation:        # «1e30»: más dígitos de los que entran al centavo
+        return None
 
 
 def digitos(valor):
