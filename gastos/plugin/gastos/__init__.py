@@ -1848,6 +1848,21 @@ async def _previo_directo(ctx, args):
         return None
 
 
+async def _terminal_cargar(t, argv):
+    from . import terminal
+    return await terminal.cargar(t, argv, sys.modules[__name__])
+
+
+def _de_terminal():
+    """El comando de terminal `gastos cargar`, solo en un motor que trae bot.terminal (0.6.33): el mismo plugin carga en
+    los anteriores, sin él."""
+    if "terminal" not in plugins.Plugin.__dataclass_fields__:
+        return {}
+    from bot.terminal import ComandoTerminal
+    return {"terminal": (ComandoTerminal("cargar", _terminal_cargar, "Carga un lote de comprobantes desde la terminal: "
+                                         "gastos cargar --empresa E --carpeta FOTOS --lecturas L.json --propuesta P.json"),)}
+
+
 def _deshacer_de_la_carga():
     """El argumento `deshacer` de gasto_cargar, solo en un motor que lo conoce (0.6.31): el mismo plugin carga en los
     anteriores. La carga retoma por identificadores verificables, así que un reintento con la misma propuesta no duplica."""
@@ -2058,7 +2073,7 @@ PLUGIN = plugins.Plugin(
         plugins.PuntoExtension("gastos.politica", 1, _validar_politica),
         plugins.PuntoExtension("gastos.seguimiento", 1, _validar_seguimiento),
         plugins.PuntoExtension("gastos.emisores", 1, _validar_observados),
-        plugins.PuntoExtension("gastos.presentacion", 1, presentacion.validar_proveedor)))
+        plugins.PuntoExtension("gastos.presentacion", 1, presentacion.validar_proveedor)), **_de_terminal())
 
 
 # La sala personal del trámite de gastos: su nota de sistema le dice al modelo qué tools usar y qué workflow seguir.

@@ -632,3 +632,18 @@ manda nada. El texto para la persona ofrece prepararlo; el modelo recibe el mail
 del motor: anota la primera vez que ofreció el mail y, si se lo vuelven a pedir, el modelo pregunta si ya salió antes de
 prepararlo otra vez, porque otro OK lo manda de nuevo. `gasto_presentacion {lote_id, empresa, destino}` (solo lectura, con
 el candado del lote) lo devuelve después, sobre una carga completa. `gasto_anular` la borra con el recibo.
+
+0.1.0-dev.21. Con el motor 0.6.33 (`bot.terminal`), el comando de terminal `gastos cargar` corre el mismo `gasto_preparar` →
+OK → `gasto_cargar` fuera del chat: `python -m bot.terminal --entorno E --datos D --persona LOGIN --nombre N gastos cargar
+--empresa E [--destino D] --carpeta FOTOS --lecturas L.json --propuesta P.json [--salida S]`. Solo en el circuito de facturas.
+Las fotos o PDF de `--carpeta` se numeran por orden de nombre; las lecturas (`{"<n>": lectura}`, esquema `fiscal.ESQUEMA`) y
+la propuesta (`{"comprobantes", "excluir_fotos"}` de `gasto_preparar`) las arma el agente de código. Misma configuración,
+custodia, firma, recibos y presentación que el chat; la propuesta es la misma con las mismas lecturas, salvo el número de lote,
+su `revision` y lo que dependa del alta. El usuario del ERP sale de Odoo con las credenciales de la persona
+(`t.vincular_erp`). El OK es el de la terminal: teclear la huella. El lote es de terminal (L900000 a L999999); si su número
+ya tiene facturas en la compañía (`invoice_origin` con `[<lote>/`), el lote local se descarta y se toma otro. Repetir con el
+mismo material retoma la misma corrida. No hay alta de proveedor (`proveedores.disponible(c, ctx)` es None con un contexto de
+terminal): con `ante_error: borrador` la factura va con el proveedor a regularizar, marcada; sin eso, frena como en un
+destino sin alta. La presentación, si la empresa la declara, queda en `<salida>/<lote>.eml` sin enviar (sin remitente y con
+`X-Unsent: 1`). Sale con 0 si la carga quedó completa, 1 si no se cargó o quedó a medias, 2 por uso. En un motor anterior el
+plugin carga igual, sin el comando.
