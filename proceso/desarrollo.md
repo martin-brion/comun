@@ -117,7 +117,7 @@ Un solo job: de la rama revisada a un tag publicado.
 Un solo job: del tag a una entrega en la carpeta compartida.
 
 - **Inputs.** De esta corrida: el tag. De todas: la herramienta de entrega, en el `CONTEXT.md` de la raíz del lado que corta.
-- **NO cargar:** nada del lado que recibe.
+- **NO cargar:** datos reales.
 - **Process.**
   1. Armá la entrega con la herramienta. El motor pide además qué commits ya desplegados trae.
   2. Barré `~/motores-compartidos` con la misma herramienta.
