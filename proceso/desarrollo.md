@@ -22,7 +22,7 @@ Este archivo no las nombra.
 
 ## Qué cruza
 
-- Hacia el lado que recibe, un archivo y nada más: la entrega sin historia. Ni submódulos, ni forks, ni espejos, ni una
+- Hacia el lado que recibe, la entrega sin historia y nada más: su `.tar` y su `.json` (etapa 6). Ni submódulos, ni forks, ni espejos, ni una
   dirección que apunte a un repo.
 - Lo que nace en el lado que recibe lo trae el lado que corta, código incluido: lo lee en los repos del que recibe, sin
   escribir ni correr nada ahí, y lo adapta sin nombres ni datos. El lado que recibe no lee los repos del lado que corta: pide.
@@ -68,8 +68,8 @@ Un solo job: del pedido a una rama con el cambio y sus pruebas. Lo hace la sesi�
 
 - **Inputs.** De esta corrida: el pedido. De todas: `AGENTS.md` del repo y, si los tiene, `AGENTS.md` y `CONTRATO.md`
   del componente.
-- **NO cargar:** datos reales del lado que recibe. Su código sí se lee y se trae: se copia acá y se limpia de nombres,
-  rutas y datos; la compuerta de la etapa 5 lo revisa.
+- **NO cargar:** datos reales del lado que recibe. Su código sí se lee y se trae, pero se limpia de nombres, rutas y datos
+  fuera del repo, antes del primer commit; la compuerta de la etapa 5 lo vuelve a revisar.
 - **Process.**
   1. Rama corta en el repo que toca, con la identidad de ese repo y un nombre distinto del tag que va a salir: si se llaman
      igual, publicar el tag es ambiguo.
