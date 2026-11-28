@@ -22,10 +22,9 @@ Este archivo no las nombra.
 
 ## Qué cruza
 
-- Hacia el lado que recibe, la entrega sin historia y nada más: su `.tar` y su `.json` (etapa 6). Ni submódulos, ni forks, ni espejos, ni una
-  dirección que apunte a un repo.
-- Lo que nace en el lado que recibe lo trae el lado que corta, código incluido: lo lee en los repos del que recibe, sin
-  escribir ni correr nada ahí, y lo adapta sin nombres ni datos. El lado que recibe no lee los repos del lado que corta: pide.
+- Hacia el lado que recibe, la entrega sin historia y nada más: su `.tar` y su `.json` (etapa 6). Ni submódulos, ni forks,
+  ni espejos, ni una dirección que apunte a un repo.
+- Desde el lado que recibe, un pedido escrito y sin código. El lado que recibe no carga repos del lado que corta: pide.
 - Nada de lo que cruza nombra instalaciones, clientes, partners ni prospectos, ni trae datos reales o secretos.
 
 ## 1. Pedido — la idea queda escrita
@@ -39,9 +38,8 @@ Un solo job: de una idea a un pedido que el otro lado pueda hacer sin preguntar.
   2. Escribí el pedido, `AAMMDD-tema.md`: qué hace falta, para qué, cómo se prueba y a quién avisar. Va a
      `~/motores-compartidos/pedidos/`. Si el otro lado todavía no puede recibirlo, queda en espera del lado que lo escribió,
      con «Cuándo», y junta ahí sus respuestas hasta que se deja en la carpeta.
-  3. Si nace en el lado que recibe, el pedido dice qué hace, sus reglas, casos inventados y lo que ya falló, y quién lo
-     escribió. Lo hecho se nombra por su función, sin rutas: el lado que corta lo lee en los repos del que recibe. El
-     pedido no copia código ni lleva IDs ni ejemplos reales.
+  3. Si nace en el lado que recibe, el pedido dice qué hace, sus reglas, modelos y campos, casos inventados y lo que ya
+     falló, y quién lo escribió. Sin código, IDs ni ejemplos reales.
   4. Al dejarlo en la carpeta, avisá a una sesión del otro lado por el canal del `LEEME.md`.
 - **Outputs.** El pedido, en esa carpeta o en espera.
 - **Chequeo.** Automático: el lado que corta barre la carpeta y frena ante cualquier nombre.
@@ -52,7 +50,7 @@ Un solo job: de una idea a un pedido que el otro lado pueda hacer sin preguntar.
 Un solo job: del pedido a una decisión escrita sobre dónde se programa.
 
 - **Inputs.** De esta corrida: el pedido. De todas: la tabla de arriba.
-- **NO cargar:** datos reales del lado que recibe.
+- **NO cargar:** datos reales.
 - **Process.**
   1. Un arreglo a algo que ya está en `motor-chat` o `comun` sigue derecho a la etapa 3.
   2. Algo nuevo entra en `comun` solo si cumple las tres: lo usan las dos empresas, anda sin nombrar a nadie y se prueba con
@@ -68,8 +66,8 @@ Un solo job: del pedido a una rama con el cambio y sus pruebas. Lo hace la sesi�
 
 - **Inputs.** De esta corrida: el pedido. De todas: `AGENTS.md` del repo y, si los tiene, `AGENTS.md` y `CONTRATO.md`
   del componente.
-- **NO cargar:** datos reales del lado que recibe. Su código sí se lee y se trae, pero se limpia de nombres, rutas y datos
-  fuera del repo, antes del primer commit; la compuerta de la etapa 5 lo vuelve a revisar.
+- **NO cargar:** datos reales. Lo que entra al repo se limpia de nombres, rutas y datos fuera del repo, antes del primer
+  commit; la compuerta de la etapa 5 lo vuelve a revisar.
 - **Process.**
   1. Rama corta en el repo que toca, con la identidad de ese repo y un nombre distinto del tag que va a salir: si se llaman
      igual, publicar el tag es ambiguo.
@@ -119,7 +117,7 @@ Un solo job: de la rama revisada a un tag publicado.
 Un solo job: del tag a una entrega en la carpeta compartida.
 
 - **Inputs.** De esta corrida: el tag. De todas: la herramienta de entrega, en el `CONTEXT.md` de la raíz del lado que corta.
-- **NO cargar:** nada del lado que recibe.
+- **NO cargar:** datos reales.
 - **Process.**
   1. Armá la entrega con la herramienta. El motor pide además qué commits ya desplegados trae.
   2. Barré `~/motores-compartidos` con la misma herramienta.
